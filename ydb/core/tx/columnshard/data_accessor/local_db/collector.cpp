@@ -5,7 +5,7 @@ namespace NKikimr::NOlap::NDataAccessorControl::NLocalDB {
 
 void TCollector::DoAskData(THashMap<TInternalPathId, TPortionsByConsumer>&& portions, const std::shared_ptr<IAccessorCallback>& callback) {
     NActors::TActivationContext::Send(
-        TabletActorId, std::make_unique<NDataAccessorControl::TEvAskTabletDataAccessors>(std::move(portions), callback));
+        TabletActorId, std::make_unique<NDataAccessorControl::TEvAskTabletDataAccessors>(std::move(portions), callback, GetTabletId()));
 }
 
 TDataCategorized TCollector::DoAnalyzeData(const TPortionsByConsumer& portions) {

@@ -13,8 +13,8 @@ private:
     virtual void DoModifyPortions(const std::vector<TPortionDataAccessor>& add, const std::vector<ui64>& remove) override;
 
 public:
-    TCollector(const TInternalPathId pathId)
-        : TBase(pathId) {
+    TCollector(const TTabletId tabletId, const TInternalPathId pathId)
+        : TBase(tabletId, pathId) {
     }
 };
 

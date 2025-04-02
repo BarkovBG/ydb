@@ -6,7 +6,7 @@
 
 namespace NKikimr::NOlap::NDataAccessorControl {
 
-void TLocalManager::DrainQueue() {
+void TLocalManager::DrainQueue(const TTabletId tabletId) {
     std::optional<TInternalPathId> lastPathId;
     IGranuleDataAccessor* lastDataAccessor = nullptr;
     TPositiveControlInteger countToFlight;
@@ -19,7 +19,7 @@ void TLocalManager::DrainQueue() {
             PortionsAsk.pop_front();
             if (!lastPathId || *lastPathId != p->GetPathId()) {
                 lastPathId = p->GetPathId();
-                auto it = Managers.find(p->GetPathId());
+                auto it = Managers.find(makeManagerKey(tabletId, p->GetPathId()));
                 if (it == Managers.end()) {
                     lastDataAccessor = nullptr;
                 } else {
@@ -53,7 +53,7 @@ void TLocalManager::DrainQueue() {
             }
         }
         for (auto&& i : portionsToAsk) {
-            auto it = Managers.find(i.first);
+            auto it = Managers.find(makeManagerKey(tabletId, i.first));
             AFL_VERIFY(it != Managers.end());
             auto dataAnalyzed = it->second->AnalyzeData(i.second);
             for (auto&& accessor : dataAnalyzed.GetCachedAccessors()) {
@@ -81,7 +81,7 @@ void TLocalManager::DrainQueue() {
     Counters.QueueSize->Set(PortionsAsk.size());
 }
 
-void TLocalManager::DoAskData(const std::shared_ptr<TDataAccessorsRequest>& request) {
+void TLocalManager::DoAskData(const TTabletId tabletId, const std::shared_ptr<TDataAccessorsRequest>& request) {
     AFL_INFO(NKikimrServices::TX_COLUMNSHARD)("event", "ask_data")("request", request->DebugString());
     for (auto&& pathId : request->GetPathIds()) {
         auto portions = request->StartFetching(pathId);
@@ -97,23 +97,25 @@ void TLocalManager::DoAskData(const std::shared_ptr<TDataAccessorsRequest>& requ
             }
         }
     }
-    DrainQueue();
+    DrainQueue(tabletId);
 }
 
-void TLocalManager::DoRegisterController(std::unique_ptr<IGranuleDataAccessor>&& controller, const bool update) {
+void TLocalManager::DoRegisterController(std::unique_ptr<IGranuleDataAccessor>&& controller, const TTabletId tabletId, const bool update) {
+    const auto it = Managers.find(makeManagerKey(tabletId, controller->GetPathId()));
     if (update) {
-        auto it = Managers.find(controller->GetPathId());
         if (it != Managers.end()) {
             it->second = std::move(controller);
         }
     } else {
-        AFL_VERIFY(Managers.emplace(controller->GetPathId(), std::move(controller)).second);
+        if (it == Managers.end()) {
+            AFL_VERIFY(Managers.emplace(makeManagerKey(tabletId, controller->GetPathId()), std::move(controller)).second);
+        }
     }
 }
 
-void TLocalManager::DoAddPortion(const TPortionDataAccessor& accessor) {
+void TLocalManager::DoAddPortion(const TTabletId tabletId, const TPortionDataAccessor& accessor) {
     {
-        auto it = Managers.find(accessor.GetPortionInfo().GetPathId());
+        auto it = Managers.find(makeManagerKey(tabletId, accessor.GetPortionInfo().GetPathId()));
         AFL_VERIFY(it != Managers.end());
         it->second->ModifyPortions({ accessor }, {});
     }
@@ -127,7 +129,7 @@ void TLocalManager::DoAddPortion(const TPortionDataAccessor& accessor) {
         }
         RequestsByPortion.erase(it);
     }
-    DrainQueue();
+    DrainQueue(tabletId);
 }
 
 }   // namespace NKikimr::NOlap::NDataAccessorControl
