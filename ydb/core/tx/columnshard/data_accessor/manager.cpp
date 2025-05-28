@@ -12,17 +12,12 @@ void TLocalManager::DrainQueue() {
     TPositiveControlInteger countToFlight;
     while (PortionsAskInFlight + countToFlight < NYDBTest::TControllers::GetColumnShardController()->GetLimitForPortionsMetadataAsk() &&
            PortionsAsk.size()) {
-<<<<<<< HEAD
-        THashMap<TInternalPathId, TPortionsByConsumer> portionsToAsk;
-        while (PortionsAskInFlight + countToFlight < 1000 && PortionsAsk.size()) {
-            auto p = PortionsAsk.front().ExtractPortion();
-            const TString consumerId = PortionsAsk.front().GetConsumerId();
-=======
-        THashMap<TManagerKey, std::vector<TPortionInfo::TConstPtr>> portionsToAsk;
+
+        THashMap<TManagerKey, TPortionsByConsumer> portionsToAsk;
         while (PortionsAskInFlight + countToFlight < 1000 && PortionsAsk.size()) {
             auto [managerKey, portionToAsk] = PortionsAsk.front();
             auto p = portionToAsk.ExtractPortion();
->>>>>>> 7513b20cc38 (current state)
+            const TString consumerId = portionToAsk.GetConsumerId();
             PortionsAsk.pop_front();
             if (!lastManagerKey || *lastManagerKey != managerKey) {
                 lastManagerKey = managerKey;
@@ -54,11 +49,7 @@ void TLocalManager::DrainQueue() {
                 if (!toAsk) {
                     RequestsByPortion.erase(it);
                 } else {
-<<<<<<< HEAD
-                    portionsToAsk[p->GetPathId()].UpsertConsumer(consumerId).AddPortion(p);
-=======
-                    portionsToAsk[managerKey].emplace_back(p);
->>>>>>> 7513b20cc38 (current state)
+                    portionsToAsk[managerKey].UpsertConsumer(consumerId).AddPortion(p);
                     ++countToFlight;
                 }
             }
@@ -82,7 +73,7 @@ void TLocalManager::DrainQueue() {
             if (!dataAnalyzed.GetPortionsToAsk().IsEmpty()) {
                 THashMap<TInternalPathId, TPortionsByConsumer> portionsToAskImpl;
                 Counters.ResultAskDirectly->Add(dataAnalyzed.GetPortionsToAsk().GetPortionsCount());
-                portionsToAskImpl.emplace(i.first, dataAnalyzed.DetachPortionsToAsk());
+                portionsToAskImpl.emplace(i.first.second, dataAnalyzed.DetachPortionsToAsk());
                 it->second->AskData(std::move(portionsToAskImpl), AccessorCallback);
             }
         }
