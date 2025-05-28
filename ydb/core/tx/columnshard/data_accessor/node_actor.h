@@ -16,7 +16,9 @@ private:
     std::shared_ptr<IAccessorCallback> AccessorsCallback;
 
     void StartStopping() {
-        PassAway();
+        AccessorsCallback = std::make_shared<TActorAccessorsCallback>(SelfId());
+        Manager = std::make_shared<TLocalManager>(AccessorsCallback);
+        // PassAway();
     }
 
     void Handle(TEvRegisterController::TPtr& ev) {
