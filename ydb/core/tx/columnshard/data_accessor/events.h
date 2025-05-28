@@ -83,6 +83,18 @@ public:
     }
 };
 
+class TEvClearCache
+    : public NActors::TEventLocal<TEvClearCache, NColumnShard::TEvPrivate::EEv::EvClearCacheDataAccessor> {
+private:
+    YDB_READONLY_DEF(TTabletId, TabletId);
+
+public:
+    explicit TEvClearCache(const TTabletId tabletId)
+        : TabletId(tabletId) {
+    }
+};
+
+
 class TEvAskTabletDataAccessors
     : public NActors::TEventLocal<TEvAskTabletDataAccessors, NColumnShard::TEvPrivate::EEv::EvAskTabletDataAccessors> {
 private:

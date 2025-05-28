@@ -22,20 +22,29 @@ private:
     }
 
     void Handle(TEvRegisterController::TPtr& ev) {
-        Manager->RegisterController(ev->Get()->ExtractController(), ev->Get()->IsUpdate());
+        auto controller = ev->Get()->ExtractController();
+        AFL_WARN(NKikimrServices::TX_COLUMNSHARD)("IURII", "Reg")("Tid", controller->GetTabletId());
+        Manager->RegisterController(move(controller), ev->Get()->IsUpdate());
     }
     void Handle(TEvUnregisterController::TPtr& ev) {
+        AFL_WARN(NKikimrServices::TX_COLUMNSHARD)("IURII", "Unreg")("Tid", ev->Get()->GetTabletId());
         Manager->UnregisterController(ev->Get()->GetTabletId(), ev->Get()->GetPathId());
     }
     void Handle(TEvAddPortion::TPtr& ev) {
+        AFL_WARN(NKikimrServices::TX_COLUMNSHARD)("IURII", "Add")("Tid", ev->Get()->GetTabletId());
         for (auto&& a : ev->Get()->ExtractAccessors()) {
             Manager->AddPortion(ev->Get()->GetTabletId(), std::move(a));
         }
     }
     void Handle(TEvRemovePortion::TPtr& ev) {
+        AFL_WARN(NKikimrServices::TX_COLUMNSHARD)("IURII", "Remove")("Tid", ev->Get()->GetTabletId());
         Manager->RemovePortion(ev->Get()->GetTabletId(), ev->Get()->GetPortion());
     }
     void Handle(TEvAskServiceDataAccessors::TPtr& ev);
+    void Handle(TEvClearCache::TPtr& ev) {
+        AFL_WARN(NKikimrServices::TX_COLUMNSHARD)("IURII", "CLEAR")("Tid", ev->Get()->GetTabletId());
+        Manager->ClearCache(ev->Get()->GetTabletId());
+    }
 
 public:
 
@@ -61,6 +70,7 @@ public:
             hFunc(TEvAskServiceDataAccessors, Handle);
             hFunc(TEvRemovePortion, Handle);
             hFunc(TEvAddPortion, Handle);
+            hFunc(TEvClearCache, Handle);
             default:
                 AFL_VERIFY(false);
         }

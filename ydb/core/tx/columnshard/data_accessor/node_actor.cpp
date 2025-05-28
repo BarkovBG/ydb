@@ -7,6 +7,7 @@ NActors::IActor* TNodeActor::CreateActor() {
 }
 
 void TNodeActor::Handle(TEvAskServiceDataAccessors::TPtr& ev) {
+    AFL_WARN(NKikimrServices::TX_COLUMNSHARD)("IURII", "ASK")("Tid", ev->Get()->GetTabletId());
     Manager->AskData(ev->Get()->GetTabletId(), ev->Get()->GetRequest());
 }
 

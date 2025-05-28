@@ -36,6 +36,9 @@ private:
         Manager->RemovePortion(ev->Get()->GetTabletId(), ev->Get()->GetPortion());
     }
     void Handle(TEvAskServiceDataAccessors::TPtr& ev);
+    void Handle(TEvClearCache::TPtr& ev) {
+        Manager->ClearCache(ev->Get()->GetTabletId());
+    }
 
 public:
     TActor(const ui64 tabletId, const TActorId& parent)
@@ -56,6 +59,7 @@ public:
             hFunc(TEvAskServiceDataAccessors, Handle);
             hFunc(TEvRemovePortion, Handle);
             hFunc(TEvAddPortion, Handle);
+            hFunc(TEvClearCache, Handle);
             default:
                 AFL_VERIFY(false);
         }

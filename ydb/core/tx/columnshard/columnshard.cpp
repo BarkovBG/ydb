@@ -37,7 +37,15 @@ void TColumnShard::CleanupActors(const TActorContext& ctx) {
     ctx.Send(ResourceSubscribeActor, new TEvents::TEvPoisonPill);
     ctx.Send(BufferizationInsertionWriteActorId, new TEvents::TEvPoisonPill);
     ctx.Send(BufferizationPortionsWriteActorId, new TEvents::TEvPoisonPill);
-    ctx.Send(DataAccessorsControlActorId, new TEvents::TEvPoisonPill);
+    if (AppData(ctx)->FeatureFlags.GetEnableSharedMetadataCache()){
+        AFL_WARN(NKikimrServices::TX_COLUMNSHARD)("IURII", "ENABLED")("Tid", (NOlap::TTabletId)TabletID());
+        // DataAccessorsManager->ClearCache((NOlap::TTabletId)TabletID());
+        ctx.Send(DataAccessorsControlActorId, new NOlap::NDataAccessorControl::TEvClearCache((NOlap::TTabletId)TabletID()));
+    }
+    else {
+        AFL_WARN(NKikimrServices::TX_COLUMNSHARD)("IURII", "DISABLED");
+        ctx.Send(DataAccessorsControlActorId, new TEvents::TEvPoisonPill);
+    }
     if (!!OperationsManager) {
         OperationsManager->StopWriting();
     }

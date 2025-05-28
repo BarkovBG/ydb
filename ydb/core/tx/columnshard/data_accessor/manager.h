@@ -40,6 +40,7 @@ private:
     virtual void DoUnregisterController(const TTabletId tabletId, const TInternalPathId pathId) = 0;
     virtual void DoAddPortion(const TTabletId tabletId, const TPortionDataAccessor& accessor) = 0;
     virtual void DoRemovePortion(const TTabletId tabletId, const TPortionInfo::TConstPtr& portion) = 0;
+    virtual void DoClearCache(const TTabletId tabletId) = 0;
     const NActors::TActorId TabletActorId;
 
 public:
@@ -71,6 +72,9 @@ public:
     void UnregisterController(const TTabletId tabletId, const TInternalPathId pathId) {
         return DoUnregisterController(tabletId, pathId);
     }
+    void ClearCache(const TTabletId tabletId) {
+        return DoClearCache(tabletId);
+    }
 };
 
 class TDataAccessorsManagerContainer: public NBackgroundTasks::TControlInterfaceContainer<IDataAccessorsManager> {
@@ -100,6 +104,9 @@ private:
     }
     virtual void DoRemovePortion(const TTabletId tabletId, const TPortionInfo::TConstPtr& portion) override {
         NActors::TActivationContext::Send(ActorId, std::make_unique<TEvRemovePortion>(tabletId, portion));
+    }
+    virtual void DoClearCache(const TTabletId tabletId) override {
+        NActors::TActivationContext::Send(ActorId, std::make_unique<TEvClearCache>(tabletId));
     }
 
 public:
@@ -147,16 +154,27 @@ private:
 
     void DrainQueue();
 
-    virtual void DoAskData(TTabletId tabletId, const std::shared_ptr<TDataAccessorsRequest>& request) override;
+    virtual void DoAskData(const TTabletId tabletId, const std::shared_ptr<TDataAccessorsRequest>& request) override;
     virtual void DoRegisterController(std::unique_ptr<IGranuleDataAccessor>&& controller, const bool update) override;
-    virtual void DoUnregisterController(TTabletId tabletId, const TInternalPathId pathId) override {
+    virtual void DoUnregisterController(const TTabletId tabletId, const TInternalPathId pathId) override {
         AFL_VERIFY(Managers.erase(TManagerKey{tabletId, pathId}));
     }
     virtual void DoAddPortion(const TTabletId tabletId, const TPortionDataAccessor& accessor) override;
-    virtual void DoRemovePortion(TTabletId tabletId, const TPortionInfo::TConstPtr& portionInfo) override {
+    virtual void DoRemovePortion(const TTabletId tabletId, const TPortionInfo::TConstPtr& portionInfo) override {
         auto it = Managers.find(TManagerKey{tabletId, portionInfo->GetPathId()});
         AFL_VERIFY(it != Managers.end());
         it->second->ModifyPortions({}, { portionInfo->GetPortionId() });
+    }
+    virtual void DoClearCache(const TTabletId tabletId) override {
+        std::vector<TManagerKey> toErase{};
+        for (auto&& [managerKey, _] : Managers) {
+            if (managerKey.first == tabletId) {
+                toErase.emplace_back(managerKey);
+            }
+        }
+        for (auto&& managerKey : toErase) {
+            Managers.erase(managerKey);
+        }
     }
 
 public:
