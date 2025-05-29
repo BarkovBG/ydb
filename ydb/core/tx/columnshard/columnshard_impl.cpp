@@ -1158,6 +1158,8 @@ void TColumnShard::Die(const TActorContext& ctx) {
     UnregisterMediatorTimeCast();
     NYDBTest::TControllers::GetColumnShardController()->OnTabletStopped(*this);
     Send(SpaceWatcherId, new NActors::TEvents::TEvPoison);
+
+    AFL_WARN(NKikimrServices::TX_COLUMNSHARD)("IURII", "DIES")("Tid", (NOlap::TTabletId)TabletID());
     IActor::Die(ctx);
 }
 
