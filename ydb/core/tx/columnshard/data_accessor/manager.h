@@ -165,7 +165,7 @@ private:
         AFL_VERIFY(it != Managers.end());
         it->second->ModifyPortions({}, { portionInfo->GetPortionId() });
     }
-    virtual void DoClearCache(const TTabletId tabletId) override {
+    virtual void DoClearCache([[maybe_unused]] const TTabletId tabletId) override {
         std::vector<TManagerKey> toErase{};
         for (auto&& [managerKey, _] : Managers) {
             if (managerKey.first == tabletId) {
