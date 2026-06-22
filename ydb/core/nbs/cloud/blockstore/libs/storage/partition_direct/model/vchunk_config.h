@@ -32,6 +32,11 @@ public:
     // host.
     void DisableHost(THostIndex hostIndex);
 
+    // Append a new host (index == current host count) as an idle spare: role
+    // None for both PBuffer and DDisk, disabled, no ddisk watermark. Used by
+    // the DBG AddHost flow; existing hosts are untouched.
+    void AppendHost();
+
     // Disables the host. Demote ddisk and pbuffer. If possible, adds ddisk on
     // the new host. Returns the text of the error or message to be logged.
     TString EvacuateHost(THostIndex hostIndex);

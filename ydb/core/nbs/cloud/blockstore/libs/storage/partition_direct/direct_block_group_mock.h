@@ -211,6 +211,17 @@ public:
         THostIndex hostIndex) override;
 
     NThreading::TFuture<TDBGDumpResponse> Dump() override;
+
+    using TAddHostHandler = std::function<void(
+        THostIndex newHostIndex,
+        NKikimrBlobStorage::NDDisk::TDDiskId ddiskId,
+        NKikimrBlobStorage::NDDisk::TDDiskId pbufferId)>;
+    TAddHostHandler AddHostHandler;
+
+    void AddHost(
+        THostIndex newHostIndex,
+        NKikimrBlobStorage::NDDisk::TDDiskId ddiskId,
+        NKikimrBlobStorage::NDDisk::TDDiskId pbufferId) override;
 };
 
 using TDirectBlockGroupMockPtr = std::shared_ptr<TDirectBlockGroupMock>;

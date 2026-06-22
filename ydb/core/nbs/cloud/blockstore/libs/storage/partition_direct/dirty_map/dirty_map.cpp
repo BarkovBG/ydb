@@ -276,6 +276,19 @@ void TBlocksDirtyMap::UpdateConfig(const TVChunkConfig& vChunkConfig)
     }
 }
 
+void TBlocksDirtyMap::ResizeHosts(size_t newHostCount)
+{
+    Y_ABORT_UNLESS(newHostCount <= MaxHostCount);
+    Y_ABORT_UNLESS(newHostCount >= PBufferCounters.size());
+    Y_ABORT_UNLESS(newHostCount >= DDiskStates.size());
+
+    // New slots are default-constructed (offline ddisk, empty counters),
+    // matching how an existing None-role host looks. If the host is later
+    // promoted, UpdateConfig()'s "added" path will Init its ddisk state.
+    PBufferCounters.resize(newHostCount);
+    DDiskStates.resize(newHostCount);
+}
+
 TBlocksDirtyMap::~TBlocksDirtyMap()
 {
     Inflight.Enumerate(
@@ -652,6 +665,15 @@ std::optional<ui64> TBlocksDirtyMap::GetSafeBarrierForErase() const
 const TPBufferCounters& TBlocksDirtyMap::GetPBufferCounters(
     THostIndex host) const
 {
+    // A runtime-added host is visible to the Oracle (which grows its per-host
+    // vectors synchronously in AddHost) before this vchunk's dirty map grows
+    // to include it -- ResizeHosts runs on the asynchronous config-persist.
+    // Report empty counters for a not-yet-grown spare rather than indexing out
+    // of bounds; a fresh spare holds no PBuffer data, so zero is correct.
+    if (host >= PBufferCounters.size()) {
+        static const TPBufferCounters Empty;
+        return Empty;
+    }
     return PBufferCounters[host];
 }
 

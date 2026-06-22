@@ -99,6 +99,51 @@ Y_UNIT_TEST_SUITE(TDirtyMapTest)
             readHint.DebugPrint());
     }
 
+    Y_UNIT_TEST(ResizeHostsGrowsPerHostBookkeeping)
+    {
+        auto vchunkConfig = MakeTestVChunkConfig();   // 5 hosts
+        TBlocksDirtyMap dirtyMap(
+            vchunkConfig,
+            DefaultBlockSize,
+            DefaultVChunkSize / DefaultBlockSize);
+
+        // Append an idle-spare host, grow the dirty map, re-apply the config.
+        vchunkConfig.AppendHost();
+        const auto newIdx = static_cast<THostIndex>(5);
+        dirtyMap.ResizeHosts(vchunkConfig.GetHostCount());
+        dirtyMap.UpdateConfig(vchunkConfig);
+
+        // The new host's per-host counters must be in bounds (no abort) and
+        // empty; its ddisk state is disabled. In DebugPrintDDiskState the "-"
+        // prefix marks a host in DisabledHosts ("*" = desired ddisk, "+" =
+        // enabled-but-non-desired), so an appended spare prints "-".
+        UNIT_ASSERT_VALUES_EQUAL(
+            0u,
+            dirtyMap.GetPBufferCounters(newIdx).CurrentBytesCount);
+        UNIT_ASSERT_STRING_CONTAINS(
+            dirtyMap.DebugPrintDDiskState(),
+            "H5-{Disabled,0,0}");
+    }
+
+    // Between AddHost (which grows the Oracle synchronously) and the async
+    // vchunk config-persist that grows the dirty map, the Oracle's view is one
+    // host ahead. Querying the not-yet-grown host index must be safe and report
+    // empty counters rather than indexing out of bounds.
+    Y_UNIT_TEST(ShouldReturnEmptyCountersForNotYetGrownHost)
+    {
+        auto vchunkConfig = MakeTestVChunkConfig();   // 5 hosts
+        TBlocksDirtyMap dirtyMap(
+            vchunkConfig,
+            DefaultBlockSize,
+            DefaultVChunkSize / DefaultBlockSize);
+
+        const auto notYetGrown =
+            static_cast<THostIndex>(vchunkConfig.GetHostCount());
+        UNIT_ASSERT_VALUES_EQUAL(
+            0u,
+            dirtyMap.GetPBufferCounters(notYetGrown).CurrentBytesCount);
+    }
+
     Y_UNIT_TEST(ShouldRespectWatermarksWhenConstruct)
     {
         auto vchunkConfig = MakeTestVChunkConfig();

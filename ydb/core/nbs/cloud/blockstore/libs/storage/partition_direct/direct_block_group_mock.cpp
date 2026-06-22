@@ -325,6 +325,16 @@ NThreading::TFuture<TDBGDumpResponse> TDirectBlockGroupMock::Dump()
     return DumpHandler();
 }
 
+void TDirectBlockGroupMock::AddHost(
+    THostIndex newHostIndex,
+    NKikimrBlobStorage::NDDisk::TDDiskId ddiskId,
+    NKikimrBlobStorage::NDDisk::TDDiskId pbufferId)
+{
+    if (AddHostHandler) {
+        AddHostHandler(newHostIndex, std::move(ddiskId), std::move(pbufferId));
+    }
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 
 }   // namespace NYdb::NBS::NBlockStore::NStorage::NPartitionDirect

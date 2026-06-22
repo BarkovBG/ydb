@@ -25,6 +25,9 @@ public:
     [[nodiscard]] EHostRole GetRole(THostIndex host) const;
     void SetRole(THostIndex host, EHostRole assignment);
 
+    // Append a new host slot at index HostCount() with the given role.
+    void AppendRole(EHostRole assignment);
+
     [[nodiscard]] THostMask GetPrimary() const;
     [[nodiscard]] THostMask GetHandOff() const;
     [[nodiscard]] THostMask GetActive() const;

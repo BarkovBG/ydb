@@ -38,6 +38,17 @@ struct IPartitionDirectService
     virtual void UpdateVChunkConfig(
         const NStorage::NPartitionDirect::TVChunkConfig& cfg) = 0;
 
+    // Asks the partition to extend the given Direct Block Group by one host.
+    // Called by a DBG on its executor thread (e.g. driven by the Oracle). The
+    // partition allocates a new host from BSController, persists it and
+    // forwards it back to the DBG via TDirectBlockGroup::AddHost.
+    // expectedCurrentHostCount is the DBG's own view of its host count; the
+    // partition rejects the request if its own view does not match
+    // (idempotency / retry safety).
+    virtual void RequestAddHost(
+        size_t directBlockGroupId,
+        ui32 expectedCurrentHostCount) = 0;
+
     // Generates the next tablet-wide write LSN. Called by a vchunk on its
     // executor thread when it starts processing a write, so generation and
     // dirty-map registration happen on the same thread. Also drives periodic

@@ -1,9 +1,13 @@
 #pragma once
 
+#include <ydb/core/nbs/cloud/blockstore/libs/storage/partition_direct/model/host.h>
 #include <ydb/core/nbs/cloud/blockstore/libs/storage/partition_direct/model/vchunk_config.h>
 #include <ydb/core/nbs/cloud/blockstore/libs/storage/partition_direct/protos/partition_direct.pb.h>
 
+#include <ydb/core/protos/blobstorage_ddisk.pb.h>
 #include <ydb/core/protos/blockstore_config.pb.h>
+
+#include <ydb/library/actors/core/actorid.h>
 
 #include <util/generic/maybe.h>
 #include <util/generic/vector.h>
@@ -18,7 +22,8 @@ namespace NYdb::NBS::NBlockStore::NStorage::NPartitionDirect {
     xxx(LoadState, __VA_ARGS__)                     \
     xxx(StoreVolumeConfig, __VA_ARGS__)             \
     xxx(StorePartitionIds, __VA_ARGS__)             \
-    xxx(UpdateVChunkConfig, __VA_ARGS__)
+    xxx(UpdateVChunkConfig, __VA_ARGS__)            \
+    xxx(AddHostToDBG, __VA_ARGS__)
 
 // BLOCKSTORE_PARTITION_TRANSACTIONS
 
@@ -110,6 +115,43 @@ struct TTxPartition
 
         explicit TUpdateVChunkConfig(TVChunkConfig vChunkConfig)
             : VChunkConfig(std::move(vChunkConfig))
+        {}
+
+        void Clear()
+        {
+            // nothing to do
+        }
+    };
+
+    //
+    // TAddHostToDBG: persists the updated Direct Block Groups Connections
+    // (with a new host appended to one of the groups), then asks the
+    // partition actor to forward the AddHost notification to the DBG.
+    //
+    struct TAddHostToDBG
+    {
+        const TDirectBlockGroupsConnections DirectBlockGroupsConnections;
+        const size_t DirectBlockGroupId;
+        const THostIndex NewHostIndex;
+        const NKikimrBlobStorage::NDDisk::TDDiskId NewDDiskId;
+        const NKikimrBlobStorage::NDDisk::TDDiskId NewPBufferId;
+        // Reply target — original sender of TEvAddHostToDBG.
+        const NActors::TActorId Requester;
+
+        TAddHostToDBG(
+            TDirectBlockGroupsConnections directBlockGroupsConnections,
+            size_t directBlockGroupId,
+            THostIndex newHostIndex,
+            NKikimrBlobStorage::NDDisk::TDDiskId newDDiskId,
+            NKikimrBlobStorage::NDDisk::TDDiskId newPBufferId,
+            NActors::TActorId requester)
+            : DirectBlockGroupsConnections(
+                  std::move(directBlockGroupsConnections))
+            , DirectBlockGroupId(directBlockGroupId)
+            , NewHostIndex(newHostIndex)
+            , NewDDiskId(std::move(newDDiskId))
+            , NewPBufferId(std::move(newPBufferId))
+            , Requester(requester)
         {}
 
         void Clear()

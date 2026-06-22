@@ -127,6 +127,19 @@ public:
 
     NThreading::TFuture<TDBGDumpResponse> Dump() override;
 
+    void AddHost(
+        THostIndex newHostIndex,
+        NKikimrBlobStorage::NDDisk::TDDiskId ddiskId,
+        NKikimrBlobStorage::NDDisk::TDDiskId pbufferId) override;
+
+    // Asks the partition (via IPartitionDirectService) to extend this Direct
+    // Block Group by one host. Runs on the executor thread. The partition
+    // allocates the host from BSController, persists it, and calls AddHost
+    // back. The eventual trigger is the Oracle; exposed as an explicit entry
+    // point for now. Fire-and-forget: no completion is delivered back to the
+    // DBG; failures are logged on the partition.
+    void RequestAddHost();
+
     // IHostStateController implementation
     void SetHostState(
         THostIndex hostIndex,
@@ -167,6 +180,8 @@ private:
     void DoEstablishConnection(
         size_t index,
         const TDDiskConnection& connection);
+
+    void NotifyVChunksAboutNewHost();
     void OnConnectionEstablished(
         EConnectionType connectionType,
         size_t index,
@@ -226,6 +241,10 @@ private:
     const TThreadChecker ExecutorThreadChecker{Executor};
     const ui64 TabletId;
     const size_t DirectBlockGroupIndex;
+    // Number of hosts present at construction. Hosts at index >= this were
+    // added at runtime via AddHost and enter as disabled spares; a failed
+    // connect on such a host must not abort the tablet.
+    const size_t InitialHostCount;
     const std::unique_ptr<NTransport::IStorageTransport> StorageTransport;
 
     TLogTitle LogTitle;

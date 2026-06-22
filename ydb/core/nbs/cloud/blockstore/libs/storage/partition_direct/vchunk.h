@@ -59,6 +59,11 @@ public:
 
     void SetHostState(THostIndex hostIndex, EHostState state);
 
+    // Append a new idle-spare host (None/None, disabled, no watermark) to this
+    // vchunk's config, grow the dirty map, and persist the new config. Called
+    // by TDirectBlockGroup::AddHost on the executor thread.
+    void OnHostAppended();
+
     [[nodiscard]] const TVChunkConfig& GetConfig() const;
     [[nodiscard]] ui64 GetPBufferUsedSize(THostIndex hostIndex) const;
     [[nodiscard]] TString DebugPrintDirtyMap();

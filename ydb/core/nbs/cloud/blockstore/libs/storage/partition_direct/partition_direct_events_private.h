@@ -30,6 +30,8 @@ struct TEvPartitionDirectPrivate
 
         EvUpdateVChunkConfig,
         EvDBGsInitiallyReady,
+        EvAddHostToDBG,
+        EvAddHostToDBGResponse,
 
         EvEnd,
     };
@@ -50,6 +52,44 @@ struct TEvPartitionDirectPrivate
         : public NActors::
               TEventLocal<TEvFastPathServiceReady, EvDBGsInitiallyReady>
     {
+    };
+
+    // Sent by the Oracle (or any internal admin path) to ask the partition
+    // to extend a specific Direct Block Group by one host. The partition
+    // contacts BSController, persists the new host list and notifies all
+    // registered VChunks through TDirectBlockGroup::AddHost.
+    struct TEvAddHostToDBG
+        : public NActors::TEventLocal<TEvAddHostToDBG, EvAddHostToDBG>
+    {
+        size_t DirectBlockGroupId;
+        // For idempotency / retry safety: the requester's view of the current
+        // host count; the partition rejects the request if its own view does
+        // not match.
+        ui32 ExpectedCurrentHostCount;
+
+        TEvAddHostToDBG(size_t dbgId, ui32 expectedCurrentHostCount)
+            : DirectBlockGroupId(dbgId)
+            , ExpectedCurrentHostCount(expectedCurrentHostCount)
+        {}
+    };
+
+    struct TEvAddHostToDBGResponse
+        : public NActors::
+              TEventLocal<TEvAddHostToDBGResponse, EvAddHostToDBGResponse>
+    {
+        NProto::TError Error;
+        size_t DirectBlockGroupId;
+        // Only meaningful when !HasError(Error).
+        THostIndex NewHostIndex = InvalidHostIndex;
+
+        TEvAddHostToDBGResponse(
+            NProto::TError error,
+            size_t dbgId,
+            THostIndex newHostIndex)
+            : Error(std::move(error))
+            , DirectBlockGroupId(dbgId)
+            , NewHostIndex(newHostIndex)
+        {}
     };
 };
 

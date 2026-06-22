@@ -82,6 +82,12 @@ public:
         EOperation operation,
         TInstant now) override;
 
+    // Grow per-host bookkeeping by one (a host was added at runtime via
+    // AddHost). The new host starts Online; it is kept out of I/O by its None
+    // roles in the vchunk config, not by host state. Must run on the DBG
+    // executor thread.
+    void OnHostAdded();
+
     [[nodiscard]] THostIndex SelectBestPBufferHost(
         THostMask hosts,
         EOperation operation) const override;

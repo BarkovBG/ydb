@@ -8,6 +8,7 @@
 #include <ydb/core/nbs/cloud/blockstore/libs/storage/api/service.h>
 #include <ydb/core/nbs/cloud/blockstore/libs/storage/core/tablet.h>
 #include <ydb/core/nbs/cloud/blockstore/libs/storage/model/log_title.h>
+#include <ydb/core/nbs/cloud/blockstore/libs/storage/partition_direct/model/host.h>
 
 #include <ydb/core/nbs/cloud/storage/core/libs/common/error.h>
 #include <ydb/core/nbs/cloud/storage/core/libs/coroutine/executor_pool.h>
@@ -20,6 +21,8 @@
 #include <ydb/core/tablet_flat/tablet_flat_executed.h>
 
 #include <ydb/library/services/services.pb.h>
+
+#include <util/generic/hash.h>
 
 namespace NYdb::NBS::NBlockStore::NStorage::NPartitionDirect {
 
@@ -50,6 +53,26 @@ private:
     NActors::TActorId LoadActorAdapter;
     bool DdiskBlockGroupAllocated = false;
     std::shared_ptr<TFastPathService> FastPathService;
+
+    // Cached copy of the latest persisted Direct Block Groups Connections.
+    // Mirrors what is written to TStorePartitionIds / TAddHostToDBG; used as
+    // the starting point for an incremental AddHost request.
+    TDirectBlockGroupsConnections DirectBlockGroupsConnections;
+
+    // In-flight AddHost operations, keyed by DirectBlockGroupId. Several
+    // add-hosts (on different Direct Block Groups) can run concurrently; a
+    // second add-host for a DBG already present here is rejected.
+    struct TAddHostInFlight
+    {
+        NActors::TActorId Requester;
+        THostIndex NewHostIndex = InvalidHostIndex;
+        ui32 ExpectedCurrentHostCount = 0;
+        // Per-request BSC pipe client (kept separate from the shared
+        // BSControllerPipeClient used by the initial allocation).
+        NActors::TActorId BSPipeClient;
+    };
+
+    THashMap<size_t, TAddHostInFlight> AddHostsInFlight;
 
 public:
     TPartitionActor(
@@ -112,6 +135,28 @@ private:
     void HandleFastPathServiceReady(
         const TEvPartitionDirectPrivate::TEvFastPathServiceReady::TPtr& ev,
         const NActors::TActorContext& ctx);
+
+    void HandleAddHostToDBG(
+        const TEvPartitionDirectPrivate::TEvAddHostToDBG::TPtr& ev,
+        const NActors::TActorContext& ctx);
+
+    // Post-persist step: forwards the added host to the DBG and replies to
+    // the requester. Called directly from CompleteAddHostToDBG once the new
+    // connection is durable.
+    void OnAddHostPersisted(
+        const NActors::TActorContext& ctx,
+        size_t dbgId,
+        THostIndex newHostIndex,
+        NKikimrBlobStorage::NDDisk::TDDiskId newDDiskId,
+        NKikimrBlobStorage::NDDisk::TDDiskId newPBufferId,
+        const NActors::TActorId& requester);
+
+    void ReplyAddHostError(
+        const NActors::TActorContext& ctx,
+        const NActors::TActorId& requester,
+        size_t dbgId,
+        ui32 errorCode,
+        TString message);
 
     void Start(
         const NActors::TActorContext& ctx,

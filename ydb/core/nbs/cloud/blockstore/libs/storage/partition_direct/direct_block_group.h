@@ -216,6 +216,17 @@ public:
 
     // Query dump for DirectBlockGroup and VChunks.
     virtual NThreading::TFuture<TDBGDumpResponse> Dump() = 0;
+
+    // Append a new host at index newHostIndex (== current host count) using
+    // the provided DDisk and PBuffer ids. Every registered VChunk is notified
+    // (it appends the host as an idle spare and grows its dirty map); Oracle's
+    // per-host bookkeeping grows too; the connection is warmed up in the
+    // background. The spare is excluded from all I/O hints until enabled.
+    // Must be called on the Executor thread.
+    virtual void AddHost(
+        THostIndex newHostIndex,
+        NKikimrBlobStorage::NDDisk::TDDiskId ddiskId,
+        NKikimrBlobStorage::NDDisk::TDDiskId pbufferId) = 0;
 };
 
 using IDirectBlockGroupPtr = std::shared_ptr<IDirectBlockGroup>;

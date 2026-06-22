@@ -405,6 +405,30 @@ Y_UNIT_TEST_SUITE(TOracle)
             EHostState::Online,
             hostStateController.States[0]);
     }
+
+    Y_UNIT_TEST(OnHostAddedGrowsStateAndThinkStaysInBounds)
+    {
+        // Regression: a host appended at runtime (OnHostAdded) grows the
+        // Oracle's per-host vectors. Think() must stay in bounds and must not
+        // flip any host's state - the new host is healthy and its spare-ness
+        // lives in the vchunk config, not in host state.
+        NProto::TStorageServiceConfig rawConfig;
+        auto config = std::make_shared<TStorageConfig>(rawConfig);
+
+        THostStateControllerMock hostStateController;
+        TOracle oracle(config, &hostStateController);
+
+        auto now = TInstant::Now();
+        oracle.Think(now);
+        UNIT_ASSERT_VALUES_EQUAL(0, hostStateController.States.size());
+
+        oracle.OnHostAdded();   // grow by one
+
+        now += TDuration::Seconds(1);
+        oracle.Think(now);   // would read/write out of bounds before the fix
+
+        UNIT_ASSERT_VALUES_EQUAL(0, hostStateController.States.size());
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////

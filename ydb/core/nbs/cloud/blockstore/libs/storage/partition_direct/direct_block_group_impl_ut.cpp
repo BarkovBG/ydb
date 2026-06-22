@@ -331,6 +331,44 @@ Y_UNIT_TEST_SUITE(TDirectBlockGroupTest)
         allReady.Wait(WaitTimeout);
         UNIT_ASSERT(allReady.HasValue());
     }
+
+    // The DBG forwards an add-host request to the partition through the
+    // IPartitionDirectService, carrying its own index and current host count.
+    Y_UNIT_TEST_F(ShouldRequestAddHostThroughService, TDBGFixture)
+    {
+        auto executor = MakeExecutor();
+        auto dbg = MakeDirectBlockGroup(
+            executor,
+            std::make_unique<TStorageTransportMock>(),
+            100);
+
+        TPartitionDirectServiceMock service(true);
+        auto initialReady = dbg->Run(&service);
+        initialReady.Wait(WaitTimeout);
+        UNIT_ASSERT(initialReady.HasValue());
+
+        // Nothing requested yet.
+        UNIT_ASSERT_VALUES_EQUAL(0u, service.AddHostRequests.size());
+
+        RunOnExecutor(
+            executor,
+            [&]
+            {
+                dbg->RequestAddHost();
+                return true;
+            })
+            .GetValue(WaitTimeout);
+
+        UNIT_ASSERT_VALUES_EQUAL(1u, service.AddHostRequests.size());
+        // MakeDirectBlockGroup uses DBG index 0 and DirectBlockGroupHostCount
+        // initial hosts.
+        UNIT_ASSERT_VALUES_EQUAL(
+            static_cast<size_t>(0),
+            service.AddHostRequests[0].DirectBlockGroupId);
+        UNIT_ASSERT_VALUES_EQUAL(
+            static_cast<ui32>(DirectBlockGroupHostCount),
+            service.AddHostRequests[0].ExpectedCurrentHostCount);
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////

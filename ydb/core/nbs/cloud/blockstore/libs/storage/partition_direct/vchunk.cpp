@@ -221,6 +221,33 @@ void TVChunk::SetHostState(THostIndex hostIndex, EHostState state)
     UpdateConfig(std::move(prepare), std::move(apply));
 }
 
+void TVChunk::OnHostAppended()
+{
+    Y_ABORT_UNLESS(ExecutorThreadChecker.Check());
+
+    auto prepare = [weakSelf = weak_from_this()]() -> TVChunkConfig
+    {
+        if (auto self = weakSelf.lock()) {
+            TVChunkConfig cfg = self->VChunkConfig;
+            cfg.AppendHost();
+            return cfg;
+        }
+        return TVChunkConfig{};
+    };
+    auto apply = [weakSelf = weak_from_this()]()
+    {
+        if (auto self = weakSelf.lock()) {
+            // OnConfigPersisted has already swapped in the larger config; grow
+            // the dirty map's per-host bookkeeping to match before ApplyConfig
+            // runs UpdateConfig over it.
+            self->BlocksDirtyMap.ResizeHosts(self->VChunkConfig.GetHostCount());
+            self->ApplyConfig();
+        }
+    };
+
+    UpdateConfig(std::move(prepare), std::move(apply));
+}
+
 const TVChunkConfig& TVChunk::GetConfig() const
 {
     Y_ABORT_UNLESS(ExecutorThreadChecker.Check());

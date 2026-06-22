@@ -54,6 +54,11 @@ void TPartitionActor::CompleteLoadState(
         VolumeConfig = *args.VolumeConfig;
 
         if (args.DirectBlockGroupsConnections.Defined()) {
+            // Connections restored from the DB mean initialization already
+            // happened (possibly in a previous tablet generation). Mark it so
+            // that subsequent allocate responses are treated as add-hosts and
+            // a re-sent UpdateVolumeConfig does not re-allocate.
+            DdiskBlockGroupAllocated = true;
             Start(
                 ctx,
                 std::move(*args.DirectBlockGroupsConnections),

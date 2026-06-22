@@ -74,6 +74,14 @@ public:
     // first time the Locked-session quorum is reached in every DBG.
     NThreading::TFuture<void> Run();
 
+    // Read-only access to the underlying Direct Block Groups. Used by the
+    // partition actor to forward AddHost to a specific DBG.
+    [[nodiscard]] const TVector<IDirectBlockGroupPtr>&
+    GetDirectBlockGroups() const
+    {
+        return DirectBlockGroups;
+    }
+
     // IStorage implementation
     NThreading::TFuture<TReadBlocksLocalResponse> ReadBlocksLocal(
         TCallContextPtr callContext,
@@ -99,6 +107,10 @@ public:
         NYdb::NBS::TCallback callback) override;
 
     void UpdateVChunkConfig(const TVChunkConfig& cfg) override;
+
+    void RequestAddHost(
+        size_t directBlockGroupId,
+        ui32 expectedCurrentHostCount) override;
 
     ui64 GenerateLsn() override;
 

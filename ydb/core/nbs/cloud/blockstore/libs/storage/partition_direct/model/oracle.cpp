@@ -166,6 +166,13 @@ void TOracle::Think(TInstant now)
     }
 }
 
+void TOracle::OnHostAdded()
+{
+    HostStatistics.emplace_back();
+    HostStates.emplace_back();   // State == Online (THostState default)
+    HostsHealths.push_back(EHostHealth::Online);
+}
+
 void TOracle::OnRequestStarted(
     THostIndex hostIndex,
     EOperation operation,

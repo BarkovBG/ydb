@@ -302,6 +302,76 @@ Y_UNIT_TEST_SUITE(TVChunkTest)
         onStop.GetValue(TDuration::Seconds(10));
     }
 
+    // OnHostAppended grows the vchunk config and the dirty map by one idle
+    // spare through the async config-persist pipeline. The apply step runs
+    // ResizeHosts before ApplyConfig; the reverse order would index the
+    // not-yet-grown dirty map out of bounds (tripped under ASAN).
+    Y_UNIT_TEST_F(ShouldAppendHostAndGrowDirtyMap, TBaseFixture)
+    {
+        Init();
+
+        auto vchunk = std::make_shared<TVChunk>(
+            Runtime->GetActorSystem(0),
+            PartitionDirectService.get(),
+            VChunkConfig,
+            DirectBlockGroup,
+            3,   // syncRequestsBatchSize
+            DefaultVChunkSize,
+            Counters);
+        vchunk->Start();
+
+        UNIT_ASSERT_VALUES_EQUAL(
+            DirectBlockGroupHostCount,
+            AccessConfig(*vchunk).GetHostCount());
+
+        // Enqueue the append on the executor.
+        {
+            TPromise<void> ready = NewPromise();
+            auto wait = ready.GetFuture();
+            DirectBlockGroup->GetExecutor()->ExecuteSimple(
+                [&]()
+                {
+                    vchunk->OnHostAppended();
+                    ready.SetValue();
+                });
+            wait.GetValue(TDuration::Seconds(10));
+        }
+
+        // Not persisted yet: the in-memory config is unchanged.
+        UNIT_ASSERT_VALUES_EQUAL(
+            DirectBlockGroupHostCount,
+            AccessConfig(*vchunk).GetHostCount());
+
+        // Drive the scheduled persist -> OnConfigPersisted -> apply.
+        {
+            UNIT_ASSERT_VALUES_EQUAL(1, ScheduledTasks.size());
+            auto task = RunScheduledTasks();
+            task.Wait(TDuration::Seconds(10));
+        }
+
+        // The new host is appended as a disabled None/None spare.
+        UNIT_ASSERT_VALUES_EQUAL(
+            DirectBlockGroupHostCount + 1,
+            AccessConfig(*vchunk).GetHostCount());
+        UNIT_ASSERT_STRING_CONTAINS(
+            AccessConfig(*vchunk).DebugPrint(),
+            "PBuffer{Primary;Primary;Primary;HandOff;HandOff;None}");
+        UNIT_ASSERT_STRING_CONTAINS(
+            AccessConfig(*vchunk).DebugPrint(),
+            "DDisk{Primary;Primary;Primary;None;None;None}");
+        UNIT_ASSERT_STRING_CONTAINS(
+            AccessConfig(*vchunk).DebugPrint(),
+            "Enabled{+++++-}");
+
+        // The dirty map grew in bounds; the new slot is a disabled spare.
+        UNIT_ASSERT_STRING_CONTAINS(
+            AccessBlocksDirtyMap(*vchunk).DebugPrintDDiskState(),
+            "H5-{Disabled,0,0}");
+
+        auto onStop = vchunk->Stop();
+        onStop.GetValue(TDuration::Seconds(10));
+    }
+
     Y_UNIT_TEST_F(ShouldSwitchHostToOfflineAndBack, TBaseFixture)
     {
         Init();

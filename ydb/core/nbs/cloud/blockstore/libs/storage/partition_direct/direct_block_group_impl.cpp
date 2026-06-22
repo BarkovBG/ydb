@@ -79,6 +79,7 @@ TDirectBlockGroup::TDirectBlockGroup(
     , Executor(std::move(executor))
     , TabletId(tabletId)
     , DirectBlockGroupIndex(directBlockGroupIndex)
+    , InitialHostCount(ddisksIds.size())
     , StorageTransport(std::move(storageTransport))
     , LogTitle(
           GetCycleCount(),
@@ -90,8 +91,11 @@ TDirectBlockGroup::TDirectBlockGroup(
           })
     , Oracle(StorageConfig, this)
 {
-    Y_ASSERT(pbufferIds.size() == DirectBlockGroupHostCount);
-    Y_ASSERT(ddisksIds.size() == DirectBlockGroupHostCount);
+    // >= rather than == : after an AddHost the persisted set grows beyond the
+    // initial DirectBlockGroupHostCount, and CreateDirectBlockGroups replays
+    // the larger set on restart.
+    Y_ASSERT(pbufferIds.size() >= DirectBlockGroupHostCount);
+    Y_ASSERT(ddisksIds.size() >= DirectBlockGroupHostCount);
 
     auto addDDiskConnections = [&](const TVector<NBsController::TDDiskId>& ids,
                                    TVector<TDDiskConnection>& connections,
@@ -1084,6 +1088,115 @@ void TDirectBlockGroup::SetHostState(
     }
 }
 
+void TDirectBlockGroup::RequestAddHost()
+{
+    Y_ABORT_UNLESS(ExecutorThreadChecker.Check());
+    Y_ABORT_UNLESS(Service);
+
+    if (DDiskConnections.size() >= MaxHostCount) {
+        LOG_ERROR(
+            *ActorSystem,
+            NKikimrServices::NBS_PARTITION,
+            "%s RequestAddHost ignored: already at MaxHostCount (%zu)",
+            LogTitle.GetWithTime().c_str(),
+            DDiskConnections.size());
+        return;
+    }
+
+    const ui32 currentHostCount = static_cast<ui32>(DDiskConnections.size());
+
+    LOG_INFO(
+        *ActorSystem,
+        NKikimrServices::NBS_PARTITION,
+        "%s RequestAddHost currentHostCount=%u",
+        LogTitle.GetWithTime().c_str(),
+        currentHostCount);
+
+    Service->RequestAddHost(DirectBlockGroupIndex, currentHostCount);
+}
+
+void TDirectBlockGroup::AddHost(
+    THostIndex newHostIndex,
+    NKikimrBlobStorage::NDDisk::TDDiskId ddiskId,
+    NKikimrBlobStorage::NDDisk::TDDiskId pbufferId)
+{
+    Y_ABORT_UNLESS(ExecutorThreadChecker.Check());
+    Y_ABORT_UNLESS(
+        static_cast<size_t>(newHostIndex) == DDiskConnections.size(),
+        "AddHost expects appending at the end (newHostIndex %lu vs size %lu)",
+        static_cast<size_t>(newHostIndex),
+        DDiskConnections.size());
+    Y_ABORT_UNLESS(DDiskConnections.size() == PBufferConnections.size());
+    Y_ABORT_UNLESS(DDiskConnections.size() < MaxHostCount);
+    Y_ABORT_UNLESS(!DDiskConnections.empty());
+
+    LOG_INFO(
+        *ActorSystem,
+        NKikimrServices::NBS_PARTITION,
+        "%s AddHost newHostIndex=%u",
+        LogTitle.GetWithTime().c_str(),
+        static_cast<ui32>(newHostIndex));
+
+    const ui32 generation =
+        DDiskConnections.front().HostConnection.Credentials.Generation;
+
+    NBsController::TDDiskId ddiskIdNative(ddiskId);
+    NBsController::TDDiskId pbufferIdNative(pbufferId);
+
+    DDiskConnections.push_back(TDDiskConnection{
+        .HostConnection = NTransport::THostConnection{
+            .ConnectionType = EConnectionType::DDisk,
+            .DDiskId = ddiskIdNative,
+            .Credentials = NDDisk::TQueryCredentials::ToDDisk(
+                TabletId,
+                generation,
+                InitialDDiskSessionSeqNo,
+                std::nullopt)}});
+
+    PBufferConnections.push_back(TDDiskConnection{
+        .HostConnection = NTransport::THostConnection{
+            .ConnectionType = EConnectionType::PBuffer,
+            .DDiskId = pbufferIdNative,
+            .Credentials = NDDisk::TQueryCredentials::ToPersistentBuffer(
+                TabletId,
+                generation,
+                std::nullopt)}});
+
+    if (!PBufferIdToHostIndex.insert({pbufferId, newHostIndex}).second) {
+        LOG_ERROR(
+            *ActorSystem,
+            NKikimrServices::NBS_PARTITION,
+            "%s AddHost: duplicate persistent buffer id from BSController, "
+            "host %u left unmapped",
+            LogTitle.GetWithTime().c_str(),
+            static_cast<ui32>(newHostIndex));
+    }
+
+    // Oracle owns the per-host stat/state/health vectors; grow them.
+    Oracle.OnHostAdded();
+
+    // Each vchunk appends the host as an idle spare and grows its dirty map,
+    // then persists its config.
+    NotifyVChunksAboutNewHost();
+
+    // Warm up connections in the background. OnConnectionEstablished handles
+    // the post-init case: a failed connect is logged and the host stays a
+    // disabled spare (it is not referenced by any I/O hint).
+    DoEstablishConnection(newHostIndex, DDiskConnections[newHostIndex]);
+    DoEstablishConnection(newHostIndex, PBufferConnections[newHostIndex]);
+}
+
+void TDirectBlockGroup::NotifyVChunksAboutNewHost()
+{
+    Y_ABORT_UNLESS(ExecutorThreadChecker.Check());
+
+    for (const auto& weakVChunk: VChunks) {
+        if (auto vChunk = weakVChunk.lock()) {
+            vChunk->OnHostAppended();
+        }
+    }
+}
+
 ui64 TDirectBlockGroup::GetHostPBufferUsedSize(THostIndex hostIndex) const
 {
     ui64 result = 0;
@@ -1160,6 +1273,19 @@ void TDirectBlockGroup::OnConnectionEstablished(
             connection.SessionState = EDDiskSessionState::Locked;
         }
         // INVARIANT: PBuffer does NOT require a session/lock
+    } else if (index >= InitialHostCount) {
+        // A host added at runtime via AddHost. It is a disabled spare, not
+        // referenced by any read/write hint, so a failed connect is harmless:
+        // log it and leave the host disabled. Discriminating by host identity
+        // (not InitialReadyPromise) keeps a spare added before the initial
+        // quorum from aborting the tablet on a transient connect failure.
+        LOG_ERROR(
+            *ActorSystem,
+            NKikimrServices::NBS_PARTITION,
+            "%s AddHost connection failed for host %zu: %s",
+            LogTitle.GetWithTime().c_str(),
+            index,
+            error.GetMessage().c_str());
     } else {
         // TODO (future phase): handle the error code/BLOCKED, transition to
         // Broken/suicide.

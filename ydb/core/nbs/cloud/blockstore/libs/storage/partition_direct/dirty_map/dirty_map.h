@@ -212,6 +212,12 @@ public:
     // Note. Fresh watermarks are not applying for exists DDisks.
     void UpdateConfig(const TVChunkConfig& vChunkConfig);
 
+    // Grow per-host bookkeeping (DDiskStates / PBufferCounters) to
+    // newHostCount. Existing slots are preserved; new slots start as an
+    // offline ddisk with empty counters (a freshly added spare has no data).
+    // Must be called before UpdateConfig() runs over the grown config.
+    void ResizeHosts(size_t newHostCount);
+
     void RestorePBuffer(ui64 lsn, TBlockRange64 range, THostIndex host);
 
     // MakeReadHint can work with multiple locations and returns multiple
