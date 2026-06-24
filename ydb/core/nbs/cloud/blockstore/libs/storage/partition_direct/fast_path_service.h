@@ -10,6 +10,7 @@
 #include <ydb/core/nbs/cloud/blockstore/libs/service/storage.h>
 #include <ydb/core/nbs/cloud/blockstore/libs/storage/core/public.h>
 #include <ydb/core/nbs/cloud/blockstore/libs/storage/partition_direct/model/vchunk_config.h>
+#include <ydb/core/nbs/cloud/blockstore/libs/storage/partition_direct/monitoring/mon_snapshot.h>
 
 #include <ydb/core/nbs/cloud/storage/core/libs/common/public.h>
 
@@ -52,6 +53,11 @@ private:
     };
 
     TPBufferCleanupGather CleanupGather;
+
+    // Last global safe barrier computed by FinishPBufferCleanup (the lowest lsn
+    // still required across all DBGs). Read by the monitoring UI.
+    std::atomic<ui64> LastSafeBarrier{0};
+    std::atomic<bool> HasLastSafeBarrier{false};
 
 public:
     TFastPathService(
@@ -113,6 +119,13 @@ public:
         ui32 expectedCurrentHostCount) override;
 
     ui64 GenerateLsn() override;
+
+    // Read-only structured snapshot for the tablet monitoring UI: aggregates a
+    // per-DBG snapshot across all Direct Block Groups plus tablet-wide values
+    // (LSN generator, last gathered safe barrier).
+    NThreading::TFuture<TMonSnapshot> GatherMonSnapshot();
+    [[nodiscard]] ui64 GetLsnCounter() const;
+    [[nodiscard]] std::optional<ui64> GetLastSafeBarrier() const;
 
 private:
     void ScheduleDirtyMapDebugPrint();

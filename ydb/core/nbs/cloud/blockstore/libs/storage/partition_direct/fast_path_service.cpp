@@ -439,10 +439,65 @@ void TFastPathService::FinishPBufferCleanup()
         return;
     }
 
+    LastSafeBarrier.store(*globalMin);
+    HasLastSafeBarrier.store(true);
+
     const ui64 cleanupBound = *globalMin - 1;
     for (const auto& dbg: DirectBlockGroups) {
         dbg->BarrierEraseFromPBuffer(cleanupBound);
     }
+}
+
+ui64 TFastPathService::GetLsnCounter() const
+{
+    return SequenceGenerator.load();
+}
+
+std::optional<ui64> TFastPathService::GetLastSafeBarrier() const
+{
+    if (!HasLastSafeBarrier.load()) {
+        return std::nullopt;
+    }
+    return LastSafeBarrier.load();
+}
+
+namespace {
+
+struct TMonGather
+{
+    NThreading::TPromise<TMonSnapshot> Promise;
+    TMonSnapshot Snapshot;
+    std::atomic<size_t> Pending{0};
+};
+
+}   // namespace
+
+NThreading::TFuture<TMonSnapshot> TFastPathService::GatherMonSnapshot()
+{
+    auto gather = std::make_shared<TMonGather>();
+    gather->Promise = NThreading::NewPromise<TMonSnapshot>();
+    gather->Snapshot.LsnCounter = GetLsnCounter();
+    gather->Snapshot.GlobalSafeBarrier = GetLastSafeBarrier();
+    gather->Snapshot.Dbgs.resize(DirectBlockGroups.size());
+    gather->Pending.store(DirectBlockGroups.size());
+    auto future = gather->Promise.GetFuture();
+
+    if (DirectBlockGroups.empty()) {
+        gather->Promise.SetValue(std::move(gather->Snapshot));
+        return future;
+    }
+
+    for (size_t i = 0; i < DirectBlockGroups.size(); ++i) {
+        DirectBlockGroups[i]->GatherMonSnapshot().Subscribe(
+            [gather, i](NThreading::TFuture<TDbgSnapshot> f)
+            {
+                gather->Snapshot.Dbgs[i] = f.GetValue();
+                if (gather->Pending.fetch_sub(1) == 1) {
+                    gather->Promise.SetValue(std::move(gather->Snapshot));
+                }
+            });
+    }
+    return future;
 }
 
 void TFastPathService::ScheduleDirtyMapDebugPrint()
