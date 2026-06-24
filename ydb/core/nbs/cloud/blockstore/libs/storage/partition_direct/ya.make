@@ -11,6 +11,7 @@ SRCS(
     fast_path_service.cpp
     flush_request.cpp
     load_actor_adapter.cpp
+    monitoring/mon_render.cpp
     part_addhosttodbg.cpp
     part_database.cpp
     part_initschema.cpp
@@ -48,6 +49,8 @@ PEERDIR(
 
     ydb/core/mind/bscontroller
     contrib/libs/opentelemetry-proto
+
+    library/cpp/monlib/service/pages
 )
 
 END()
