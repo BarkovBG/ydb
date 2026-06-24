@@ -703,9 +703,15 @@ TVector<TDDiskStateView> TBlocksDirtyMap::GetDDiskStatesSnapshot() const
         TDDiskStateView v;
         v.HostIndex = static_cast<THostIndex>(host);
         switch (s.GetState()) {
-            case TDDiskState::EState::Disabled: v.State = "Disabled"; break;
-            case TDDiskState::EState::Operational: v.State = "Operational"; break;
-            case TDDiskState::EState::Fresh: v.State = "Fresh"; break;
+            case TDDiskState::EState::Disabled:
+                v.State = "Disabled";
+                break;
+            case TDDiskState::EState::Operational:
+                v.State = "Operational";
+                break;
+            case TDDiskState::EState::Fresh:
+                v.State = "Fresh";
+                break;
         }
         v.OperationalBlockCount = s.GetOperationalBlockCount();
         v.FreshWatermark = GetFreshWatermark(static_cast<THostIndex>(host));
@@ -714,7 +720,8 @@ TVector<TDDiskStateView> TBlocksDirtyMap::GetDDiskStatesSnapshot() const
     return out;
 }
 
-TVector<TPBufferCountersView> TBlocksDirtyMap::GetPBufferCountersSnapshot() const
+TVector<TPBufferCountersView>
+TBlocksDirtyMap::GetPBufferCountersSnapshot() const
 {
     TVector<TPBufferCountersView> out;
     out.reserve(PBufferCounters.size());

@@ -21,9 +21,8 @@
 #include <ydb/core/protos/blockstore_config.pb.h>
 #include <ydb/core/tablet_flat/tablet_flat_executed.h>
 
-#include <ydb/library/services/services.pb.h>
-
 #include <ydb/library/actors/core/mon.h>
+#include <ydb/library/services/services.pb.h>
 
 #include <util/generic/hash.h>
 

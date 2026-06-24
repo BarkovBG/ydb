@@ -281,11 +281,15 @@ TVChunkSnapshot TVChunk::BuildSnapshot() const
     s.DDiskStates = BlocksDirtyMap.GetDDiskStatesSnapshot();
     s.PBuffers = BlocksDirtyMap.GetPBufferCountersSnapshot();
 
-    auto roleName = [](EHostRole r) -> TString {
+    auto roleName = [](EHostRole r) -> TString
+    {
         switch (r) {
-            case EHostRole::Primary: return "Primary";
-            case EHostRole::HandOff: return "HandOff";
-            case EHostRole::None: return "None";
+            case EHostRole::Primary:
+                return "Primary";
+            case EHostRole::HandOff:
+                return "HandOff";
+            case EHostRole::None:
+                return "None";
         }
         return "?";
     };

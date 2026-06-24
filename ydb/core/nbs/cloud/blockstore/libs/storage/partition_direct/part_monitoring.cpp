@@ -137,8 +137,7 @@ void TPartitionActor::CompleteMonitoring(
                 actorSystem->Send(selfId, event.release());
             });
     } else {
-        req.RuntimeError =
-            "tablet is still initializing (no FastPathService)";
+        req.RuntimeError = "tablet is still initializing (no FastPathService)";
         MaybeReplyMon(ctx, args.Cookie);
     }
 }

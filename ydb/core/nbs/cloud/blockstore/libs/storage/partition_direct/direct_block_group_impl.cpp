@@ -1108,8 +1108,7 @@ TDbgSnapshot TDirectBlockGroup::DoBuildMonSnapshot()
                 c.DDiskSession = "Broken";
                 break;
         }
-        c.DDiskId =
-            DDiskConnections[host].HostConnection.DDiskId.ToString();
+        c.DDiskId = DDiskConnections[host].HostConnection.DDiskId.ToString();
         if (host < PBufferConnections.size()) {
             c.PBufferId =
                 PBufferConnections[host].HostConnection.DDiskId.ToString();

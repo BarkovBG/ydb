@@ -276,7 +276,8 @@ public:
     // Read-only snapshots for the tablet monitoring UI.
     [[nodiscard]] TDirtyMapCountsView GetCountsSnapshot() const;
     [[nodiscard]] TVector<TDDiskStateView> GetDDiskStatesSnapshot() const;
-    [[nodiscard]] TVector<TPBufferCountersView> GetPBufferCountersSnapshot() const;
+    [[nodiscard]] TVector<TPBufferCountersView>
+    GetPBufferCountersSnapshot() const;
     [[nodiscard]] size_t GetHostCount() const;
 
     // ILockableRanges implementation

@@ -2,7 +2,7 @@
 
 #include <ydb/core/nbs/cloud/blockstore/libs/storage/partition_direct/model/host.h>
 #include <ydb/core/nbs/cloud/blockstore/libs/storage/partition_direct/model/host_stat.h>   // EOperation, OperationCount, THostStat::TErrorsInfo
-#include <ydb/core/nbs/cloud/blockstore/libs/storage/partition_direct/model/host_state.h>  // EHostState
+#include <ydb/core/nbs/cloud/blockstore/libs/storage/partition_direct/model/host_state.h>   // EHostState
 
 #include <util/datetime/base.h>
 #include <util/generic/string.h>
@@ -29,9 +29,9 @@ enum class EHostHealthView
 struct TConnSnapshot
 {
     THostIndex HostIndex = InvalidHostIndex;
-    TString DDiskId;          // formatted on the executor side
-    TString PBufferId;        // formatted on the executor side
-    TString DDiskSession;     // "NotLocked" / "Locked" / "Broken"
+    TString DDiskId;        // formatted on the executor side
+    TString PBufferId;      // formatted on the executor side
+    TString DDiskSession;   // "NotLocked" / "Locked" / "Broken"
     bool PBufferConnected = false;
 };
 
@@ -48,9 +48,9 @@ struct THostSnapshot
 struct TDDiskStateView
 {
     THostIndex HostIndex = InvalidHostIndex;
-    TString State;                       // "Disabled" / "Operational" / "Fresh"
+    TString State;   // "Disabled" / "Operational" / "Fresh"
     ui64 OperationalBlockCount = 0;
-    std::optional<ui64> FreshWatermark;  // bytes offset; nullopt == full
+    std::optional<ui64> FreshWatermark;   // bytes offset; nullopt == full
 };
 
 struct TPBufferCountersView
@@ -117,23 +117,23 @@ struct THeaderInfo
     ui64 TabletId = 0;
     ui32 Generation = 0;
     TString DiskId;
-    TString State;        // "BOOT" / "INIT" / "WORK" / "ZOMBIE"
+    TString State;   // "BOOT" / "INIT" / "WORK" / "ZOMBIE"
     TDuration Uptime;
 };
 
 struct TVChunkConfigRow   // one persisted VChunkConfigs row
 {
     ui32 VChunkIndex = 0;
-    TString Summary;      // TVChunkConfig::DebugPrint()
+    TString Summary;   // TVChunkConfig::DebugPrint()
 };
 
 struct TDbContents
 {
     bool HasVolumeConfig = false;
-    TString VolumeConfigText;            // VolumeConfig.DebugString()
+    TString VolumeConfigText;   // VolumeConfig.DebugString()
     bool HasConnections = false;
-    TString ConnectionsText;             // DirectBlockGroupsConnections.DebugString()
-    TString StorageConfigText;           // short summary
+    TString ConnectionsText;     // DirectBlockGroupsConnections.DebugString()
+    TString StorageConfigText;   // short summary
     TVector<TVChunkConfigRow> VChunkConfigs;
 };
 
@@ -147,7 +147,8 @@ struct TMonPageData
 {
     THeaderInfo Header;
     TDbContents Db;
-    std::optional<TMonSnapshot> Runtime;   // absent in BOOT/INIT or on gather error
+    std::optional<TMonSnapshot>
+        Runtime;   // absent in BOOT/INIT or on gather error
     std::optional<TString> RuntimeError;   // banner text when Runtime is absent
     TCgiFilters Filters;
 };
