@@ -68,6 +68,10 @@ public:
     [[nodiscard]] ui64 GetPBufferUsedSize(THostIndex hostIndex) const;
     [[nodiscard]] TString DebugPrintDirtyMap();
 
+    // Build a read-only snapshot of this vchunk's config + dirty-map state for
+    // the tablet monitoring UI. Must run on the executor thread.
+    [[nodiscard]] TVChunkSnapshot BuildSnapshot() const;
+
     // This vchunk's contribution to the tablet-wide cleanup watermark: the
     // smallest lsn still held in PBuffers, or nullopt when nothing is inflight.
     // Must run on the executor thread.
