@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ydb/core/nbs/cloud/blockstore/libs/storage/partition_direct/model/vchunk_config.h>
+#include <ydb/core/nbs/cloud/blockstore/libs/storage/partition_direct/monitoring/mon_snapshot.h>
 
 #include <ydb/core/base/events.h>
 
@@ -33,6 +34,8 @@ struct TEvPartitionDirectPrivate
 
         EvFastPathServiceShutdown,
         EvFastPathServiceStopped,
+        EvMonDbgSnapshotReady,
+        EvMonRenderTimeout,
 
         EvEnd,
     };
@@ -67,6 +70,38 @@ struct TEvPartitionDirectPrivate
         : public NActors::
               TEventLocal<TEvFastPathServiceStopped, EvFastPathServiceStopped>
     {
+    };
+
+    // Carries one DBG's runtime snapshot (built on its executor thread) back to
+    // the actor, which fans them in by cookie and renders the monitoring page.
+    struct TEvMonDbgSnapshotReady
+        : public NActors::
+              TEventLocal<TEvMonDbgSnapshotReady, EvMonDbgSnapshotReady>
+    {
+        ui64 Cookie;
+        size_t DbgIndex;
+        TDbgSnapshot Snapshot;
+
+        TEvMonDbgSnapshotReady(
+            ui64 cookie,
+            size_t dbgIndex,
+            TDbgSnapshot snapshot)
+            : Cookie(cookie)
+            , DbgIndex(dbgIndex)
+            , Snapshot(std::move(snapshot))
+        {}
+    };
+
+    // Fires if the runtime snapshot gather does not complete in time; lets the
+    // mon request reply with whatever data is available.
+    struct TEvMonRenderTimeout
+        : public NActors::TEventLocal<TEvMonRenderTimeout, EvMonRenderTimeout>
+    {
+        ui64 Cookie;
+
+        explicit TEvMonRenderTimeout(ui64 cookie)
+            : Cookie(cookie)
+        {}
     };
 };
 

@@ -325,6 +325,15 @@ NThreading::TFuture<TDBGDumpResponse> TDirectBlockGroupMock::Dump()
     return DumpHandler();
 }
 
+void TDirectBlockGroupMock::RequestMonSnapshot(
+    NActors::TActorId replyTo,
+    ui64 cookie,
+    std::optional<size_t> vchunkIndex)
+{
+    // Monitoring is not exercised through the mock.
+    Y_UNUSED(replyTo, cookie, vchunkIndex);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 
 }   // namespace NYdb::NBS::NBlockStore::NStorage::NPartitionDirect

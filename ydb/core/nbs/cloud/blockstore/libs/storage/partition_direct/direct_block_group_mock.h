@@ -211,6 +211,11 @@ public:
         THostIndex hostIndex) override;
 
     NThreading::TFuture<TDBGDumpResponse> Dump() override;
+
+    void RequestMonSnapshot(
+        NActors::TActorId replyTo,
+        ui64 cookie,
+        std::optional<size_t> vchunkIndex) override;
 };
 
 using TDirectBlockGroupMockPtr = std::shared_ptr<TDirectBlockGroupMock>;

@@ -681,6 +681,61 @@ const TPBufferCounters& TBlocksDirtyMap::GetPBufferCounters(
     return PBufferCounters[host];
 }
 
+TDirtyMapCountsView TBlocksDirtyMap::GetCountsSnapshot() const
+{
+    return {
+        .Inflight = GetInflightCount(),
+        .FlushPending = GetFlushPendingCount(),
+        .ErasePending = GetErasePendingCount(),
+        .EraseBelated = GetEraseBelatedCount(),
+    };
+}
+
+size_t TBlocksDirtyMap::GetHostCount() const
+{
+    return DDiskStates.size();
+}
+
+TVector<TDDiskStateView> TBlocksDirtyMap::GetDDiskStatesSnapshot() const
+{
+    TVector<TDDiskStateView> out;
+    out.reserve(DDiskStates.size());
+    for (size_t host = 0; host < DDiskStates.size(); ++host) {
+        const auto& ddiskState = DDiskStates[host];
+        TDDiskStateView view;
+        switch (ddiskState.GetState()) {
+            case TDDiskState::EState::Disabled:
+                view.State = "Disabled";
+                break;
+            case TDDiskState::EState::Operational:
+                view.State = "Operational";
+                break;
+            case TDDiskState::EState::Fresh:
+                view.State = "Fresh";
+                break;
+        }
+        view.OperationalBlockCount = ddiskState.GetOperationalBlockCount();
+        out.push_back(std::move(view));
+    }
+    return out;
+}
+
+TVector<TPBufferCountersView>
+TBlocksDirtyMap::GetPBufferCountersSnapshot() const
+{
+    TVector<TPBufferCountersView> out;
+    out.reserve(PBufferCounters.size());
+    for (size_t host = 0; host < PBufferCounters.size(); ++host) {
+        const auto& counters = PBufferCounters[host];
+        out.push_back({
+            .CurrentRecords = counters.CurrentRecordsCount,
+            .CurrentBytes = counters.CurrentBytesCount,
+            .CurrentLockedRecords = counters.CurrentLockedRecordsCount,
+        });
+    }
+    return out;
+}
+
 void TBlocksDirtyMap::LockPBuffer(ui64 lsn)
 {
     auto item = Inflight.GetValue(lsn);

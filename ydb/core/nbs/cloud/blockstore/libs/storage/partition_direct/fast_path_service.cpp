@@ -439,10 +439,70 @@ void TFastPathService::FinishPBufferCleanup()
         return;
     }
 
+    LastSafeBarrier.store(*globalMin);
+    HasLastSafeBarrier.store(true);
+
     const ui64 cleanupBound = *globalMin - 1;
     for (const auto& dbg: DirectBlockGroups) {
         dbg->BarrierEraseFromPBuffer(cleanupBound);
     }
+}
+
+ui64 TFastPathService::GetLsnCounter() const
+{
+    return SequenceGenerator.load();
+}
+
+std::optional<ui64> TFastPathService::GetLastSafeBarrier() const
+{
+    if (!HasLastSafeBarrier.load()) {
+        return std::nullopt;
+    }
+    return LastSafeBarrier.load();
+}
+
+size_t TFastPathService::RequestMonSnapshot(
+    NActors::TActorId replyTo,
+    ui64 cookie,
+    std::optional<ui32> vchunkIdx)
+{
+    if (DirectBlockGroups.empty()) {
+        return 0;
+    }
+
+    // VChunk page: a single global index. Map it to its owning DBG and local
+    // position via the ring layout (see TRegion: dbg = idx % numDbg,
+    // local = idx / numDbg) and query only that DBG.
+    if (vchunkIdx) {
+        const size_t numDbg = DirectBlockGroups.size();
+        const size_t dbgIndex = *vchunkIdx % numDbg;
+        const size_t localPos = *vchunkIdx / numDbg;
+        DirectBlockGroups[dbgIndex]->RequestMonSnapshot(
+            replyTo,
+            cookie,
+            localPos);
+        return 1;
+    }
+
+    // Other pages: connections + host state from every DBG (no vchunk detail).
+    for (const auto& dbg: DirectBlockGroups) {
+        dbg->RequestMonSnapshot(replyTo, cookie, std::nullopt);
+    }
+    return DirectBlockGroups.size();
+}
+
+size_t TFastPathService::GetDirectBlockGroupCount() const
+{
+    return DirectBlockGroups.size();
+}
+
+size_t TFastPathService::GetTotalVChunkCount() const
+{
+    const ui64 vchunkSize = StorageConfig->GetVChunkSize();
+    if (vchunkSize == 0) {
+        return 0;
+    }
+    return Regions.size() * (RegionSize / vchunkSize);
 }
 
 void TFastPathService::ScheduleDirtyMapDebugPrint()

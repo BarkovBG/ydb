@@ -1,5 +1,6 @@
 #include "direct_block_group_impl.h"
 
+#include "partition_direct_events_private.h"
 #include "restore_request.h"
 #include "vchunk.h"
 
@@ -1055,6 +1056,81 @@ NThreading::TFuture<TDBGDumpResponse> TDirectBlockGroup::Dump()
         });
 
     return future;
+}
+
+void TDirectBlockGroup::RequestMonSnapshot(
+    NActors::TActorId replyTo,
+    ui64 cookie,
+    std::optional<size_t> vchunkIndex)
+{
+    Executor->ExecuteSimple(
+        [weakSelf = weak_from_this(),
+         index = DirectBlockGroupIndex,
+         vchunkIndex,
+         replyTo,
+         cookie,
+         actorSystem = ActorSystem]
+        {
+            // Runs on the DBG executor thread, where reading state is safe.
+            TDbgSnapshot snapshot{.Index = index};
+            if (auto self = weakSelf.lock()) {
+                snapshot = self->DoBuildMonSnapshot(vchunkIndex);
+            }
+            actorSystem->Send(
+                replyTo,
+                new TEvPartitionDirectPrivate::TEvMonDbgSnapshotReady(
+                    cookie,
+                    index,
+                    std::move(snapshot)));
+        });
+}
+
+TDbgSnapshot TDirectBlockGroup::DoBuildMonSnapshot(
+    std::optional<size_t> vchunkIndex)
+{
+    Y_ABORT_UNLESS(ExecutorThreadChecker.Check());
+
+    TDbgSnapshot snapshot;
+    snapshot.Index = DirectBlockGroupIndex;
+
+    const size_t hostCount = DDiskConnections.size();
+    snapshot.Connections.reserve(hostCount);
+    for (size_t host = 0; host < hostCount; ++host) {
+        TConnSnapshot conn;
+        conn.HostIndex = static_cast<THostIndex>(host);
+        switch (DDiskConnections[host].SessionState) {
+            case EDDiskSessionState::NotLocked:
+                conn.DDiskSession = "NotLocked";
+                break;
+            case EDDiskSessionState::Locked:
+                conn.DDiskSession = "Locked";
+                break;
+            case EDDiskSessionState::Broken:
+                conn.DDiskSession = "Broken";
+                break;
+        }
+        conn.DDiskId = DDiskConnections[host].HostConnection.DDiskId.ToString();
+        if (host < PBufferConnections.size()) {
+            conn.PBufferId =
+                PBufferConnections[host].HostConnection.DDiskId.ToString();
+            conn.PBufferConnected =
+                PBufferConnections[host].GetFuture().HasValue();
+        }
+        snapshot.Connections.push_back(std::move(conn));
+    }
+
+    snapshot.Hosts = Oracle.BuildHostSnapshots(TInstant::Now());
+
+    // Build the single requested vchunk by its position within this DBG. The
+    // owning DBG and the local position are derived from the global vchunk
+    // index by TFastPathService (the ring layout in TRegion). The all-vchunks
+    // gather is intentionally avoided.
+    if (vchunkIndex && *vchunkIndex < VChunks.size()) {
+        if (auto vChunk = VChunks[*vchunkIndex].lock()) {
+            snapshot.VChunks.push_back(vChunk->BuildSnapshot());
+        }
+    }
+    return snapshot;
 }
 
 void TDirectBlockGroup::SetHostState(

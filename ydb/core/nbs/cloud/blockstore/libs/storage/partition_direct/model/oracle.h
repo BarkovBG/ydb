@@ -9,6 +9,7 @@
 
 #include <ydb/core/nbs/cloud/blockstore/config/config.h>
 #include <ydb/core/nbs/cloud/blockstore/config/public.h>
+#include <ydb/core/nbs/cloud/blockstore/libs/storage/partition_direct/monitoring/mon_snapshot.h>
 
 #include <util/generic/vector.h>
 
@@ -94,6 +95,9 @@ public:
     [[nodiscard]] EWriteMode GetWriteMode() const override;
 
     [[nodiscard]] TString Dump() const override;
+
+    // Read-only per-host snapshot for the tablet monitoring UI.
+    [[nodiscard]] TVector<THostSnapshot> BuildHostSnapshots(TInstant now) const;
 
 private:
     const TStorageConfigPtr StorageConfig;

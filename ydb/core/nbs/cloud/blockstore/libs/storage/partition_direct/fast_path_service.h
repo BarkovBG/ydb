@@ -10,6 +10,7 @@
 #include <ydb/core/nbs/cloud/blockstore/libs/service/storage.h>
 #include <ydb/core/nbs/cloud/blockstore/libs/storage/core/public.h>
 #include <ydb/core/nbs/cloud/blockstore/libs/storage/partition_direct/model/vchunk_config.h>
+#include <ydb/core/nbs/cloud/blockstore/libs/storage/partition_direct/monitoring/mon_snapshot.h>
 
 #include <ydb/core/nbs/cloud/storage/core/libs/common/public.h>
 
@@ -52,6 +53,11 @@ private:
     };
 
     TPBufferCleanupGather CleanupGather;
+
+    // Last global safe barrier computed by FinishPBufferCleanup (the lowest lsn
+    // still required across all DBGs). Read by the monitoring UI.
+    std::atomic<ui64> LastSafeBarrier{0};
+    std::atomic<bool> HasLastSafeBarrier{false};
 
 public:
     TFastPathService(
@@ -102,6 +108,24 @@ public:
     void UpdateVChunkConfig(const TVChunkConfig& cfg) override;
 
     ui64 GenerateLsn() override;
+
+    // Kicks an async per-DBG snapshot gather for the tablet monitoring UI: each
+    // owning DBG delivers a TEvMonDbgSnapshotReady(cookie, index, snapshot) to
+    // replyTo. Returns how many such events to expect. vchunkIdx selects the
+    // single owning DBG (VChunk page); std::nullopt gathers every DBG (Hosts /
+    // Connections). Tablet-wide values are read synchronously via the getters
+    // below.
+    size_t RequestMonSnapshot(
+        NActors::TActorId replyTo,
+        ui64 cookie,
+        std::optional<ui32> vchunkIdx);
+    [[nodiscard]] ui64 GetLsnCounter() const;
+    [[nodiscard]] std::optional<ui64> GetLastSafeBarrier() const;
+    // Total vchunk count across all DBGs (regions * vchunks-per-region) —
+    // computed from config, no gather needed.
+    [[nodiscard]] size_t GetTotalVChunkCount() const;
+    // Number of Direct Block Groups (read synchronously by the mon UI).
+    [[nodiscard]] size_t GetDirectBlockGroupCount() const;
 
 private:
     void ScheduleDirtyMapDebugPrint();

@@ -242,6 +242,45 @@ std::optional<ui64> TVChunk::GetSafeBarrierForErase() const
     return BlocksDirtyMap.GetSafeBarrierForErase();
 }
 
+TVChunkSnapshot TVChunk::BuildSnapshot() const
+{
+    Y_ABORT_UNLESS(ExecutorThreadChecker.Check());
+
+    TVChunkSnapshot snapshot;
+    snapshot.Index = VChunkConfig.GetVChunkIndex();
+    snapshot.HostCount = VChunkConfig.GetHostCount();
+    snapshot.SafeBarrier = BlocksDirtyMap.GetSafeBarrierForErase();
+    snapshot.Counts = BlocksDirtyMap.GetCountsSnapshot();
+    snapshot.DDiskStates = BlocksDirtyMap.GetDDiskStatesSnapshot();
+    snapshot.PBuffers = BlocksDirtyMap.GetPBufferCountersSnapshot();
+
+    auto roleName = [](EHostRole role) -> TString
+    {
+        switch (role) {
+            case EHostRole::Primary:
+                return "Primary";
+            case EHostRole::HandOff:
+                return "HandOff";
+            case EHostRole::None:
+                return "None";
+        }
+        return "?";
+    };
+
+    const auto disabled = VChunkConfig.GetDisabledHosts();
+    snapshot.Roles.reserve(snapshot.HostCount);
+    for (size_t host = 0; host < snapshot.HostCount; ++host) {
+        const auto hostIndex = static_cast<THostIndex>(host);
+        THostRoleView roleView;
+        roleView.PBufferRole = roleName(VChunkConfig.GetPBufferRole(hostIndex));
+        roleView.DDiskRole = roleName(VChunkConfig.GetDDiskRole(hostIndex));
+        roleView.Enabled = !disabled.Get(hostIndex);
+        roleView.Watermark = VChunkConfig.GetWatermark(hostIndex);
+        snapshot.Roles.push_back(std::move(roleView));
+    }
+    return snapshot;
+}
+
 TString TVChunk::DebugPrintDirtyMap()
 {
     Y_ABORT_UNLESS(ExecutorThreadChecker.Check());
