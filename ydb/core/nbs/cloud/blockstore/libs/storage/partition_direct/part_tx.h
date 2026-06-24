@@ -18,7 +18,8 @@ namespace NYdb::NBS::NBlockStore::NStorage::NPartitionDirect {
     xxx(LoadState, __VA_ARGS__)                     \
     xxx(StoreVolumeConfig, __VA_ARGS__)             \
     xxx(StorePartitionIds, __VA_ARGS__)             \
-    xxx(UpdateVChunkConfig, __VA_ARGS__)
+    xxx(UpdateVChunkConfig, __VA_ARGS__)            \
+    xxx(Monitoring, __VA_ARGS__)
 
 // BLOCKSTORE_PARTITION_TRANSACTIONS
 
@@ -115,6 +116,30 @@ struct TTxPartition
         void Clear()
         {
             // nothing to do
+        }
+    };
+
+    //
+    // TMonitoring (read-only): collects persisted rows for the mon page.
+    // Cookie correlates the tx with the TMonRequest map in the actor.
+    //
+    struct TMonitoring
+    {
+        const ui64 Cookie;
+
+        TMaybe<NKikimrBlockStore::TVolumeConfig> VolumeConfig;
+        TMaybe<TDirectBlockGroupsConnections> DirectBlockGroupsConnections;
+        TVector<TVChunkConfig> VChunkConfigs;
+
+        explicit TMonitoring(ui64 cookie)
+            : Cookie(cookie)
+        {}
+
+        void Clear()
+        {
+            VolumeConfig.Clear();
+            DirectBlockGroupsConnections.Clear();
+            VChunkConfigs.clear();
         }
     };
 };

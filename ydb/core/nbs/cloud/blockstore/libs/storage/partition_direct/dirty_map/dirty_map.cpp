@@ -655,6 +655,69 @@ const TPBufferCounters& TBlocksDirtyMap::GetPBufferCounters(
     return PBufferCounters[host];
 }
 
+TDirtyMapCountsView TBlocksDirtyMap::GetCountsSnapshot() const
+{
+    TDirtyMapCountsView v;
+    v.Inflight = GetInflightCount();
+    v.FlushPending = GetFlushPendingCount();
+    v.ErasePending = GetErasePendingCount();
+    v.EraseBelated = GetEraseBelatedCount();
+    v.MinFlushPendingLsn = GetMinFlushPendingLsn();
+    v.MinErasePendingLsn = GetMinErasePendingLsn();
+    return v;
+}
+
+size_t TBlocksDirtyMap::GetHostCount() const
+{
+    return DDiskStates.size();
+}
+
+TVector<TDDiskStateView> TBlocksDirtyMap::GetDDiskStatesSnapshot() const
+{
+    TVector<TDDiskStateView> out;
+    out.reserve(DDiskStates.size());
+    for (size_t host = 0; host < DDiskStates.size(); ++host) {
+        const auto& s = DDiskStates[host];
+        TDDiskStateView v;
+        v.HostIndex = static_cast<THostIndex>(host);
+        switch (s.GetState()) {
+            case TDDiskState::EState::Disabled:
+                v.State = "Disabled";
+                break;
+            case TDDiskState::EState::Operational:
+                v.State = "Operational";
+                break;
+            case TDDiskState::EState::Fresh:
+                v.State = "Fresh";
+                break;
+        }
+        v.OperationalBlockCount = s.GetOperationalBlockCount();
+        v.FreshWatermark = GetFreshWatermark(static_cast<THostIndex>(host));
+        out.push_back(std::move(v));
+    }
+    return out;
+}
+
+TVector<TPBufferCountersView>
+TBlocksDirtyMap::GetPBufferCountersSnapshot() const
+{
+    TVector<TPBufferCountersView> out;
+    out.reserve(PBufferCounters.size());
+    for (size_t host = 0; host < PBufferCounters.size(); ++host) {
+        const auto& c = PBufferCounters[host];
+        TPBufferCountersView v;
+        v.HostIndex = static_cast<THostIndex>(host);
+        v.CurrentRecords = c.CurrentRecordsCount;
+        v.CurrentBytes = c.CurrentBytesCount;
+        v.CurrentLockedRecords = c.CurrentLockedRecordsCount;
+        v.CurrentLockedBytes = c.CurrentLockedBytesCount;
+        v.TotalRecords = c.TotalRecordsCount;
+        v.TotalBytes = c.TotalBytesCount;
+        out.push_back(std::move(v));
+    }
+    return out;
+}
+
 void TBlocksDirtyMap::LockPBuffer(ui64 lsn)
 {
     auto item = Inflight.GetValue(lsn);

@@ -127,6 +127,8 @@ public:
 
     NThreading::TFuture<TDBGDumpResponse> Dump() override;
 
+    NThreading::TFuture<TDbgSnapshot> GatherMonSnapshot() override;
+
     // IHostStateController implementation
     void SetHostState(
         THostIndex hostIndex,
@@ -219,6 +221,7 @@ private:
     [[nodiscard]] bool WaitForSessionLock(THostIndex hostIndex);
 
     TDBGDumpResponse DoDebugPrintDirtyMap();
+    TDbgSnapshot DoBuildMonSnapshot();   // runs on the executor thread
 
     NActors::TActorSystem* const ActorSystem = nullptr;
     const TStorageConfigPtr StorageConfig;

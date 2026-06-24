@@ -269,6 +269,40 @@ TString TOracle::Dump() const
     return sb;
 }
 
+TVector<THostSnapshot> TOracle::BuildHostSnapshots(TInstant now) const
+{
+    TVector<THostSnapshot> out;
+    const size_t hostCount = HostStatistics.size();
+    out.reserve(hostCount);
+    for (size_t host = 0; host < hostCount; ++host) {
+        THostSnapshot s;
+        s.Index = static_cast<THostIndex>(host);
+        s.State = HostStates[host].State;
+        s.PBufferUsedSize = HostStates[host].PBufferUsedSize;
+        switch (HostsHealths[host]) {
+            case EHostHealth::Online:
+                s.Health = EHostHealthView::Online;
+                break;
+            case EHostHealth::Sufferer:
+                s.Health = EHostHealthView::Sufferer;
+                break;
+            case EHostHealth::TemporaryOffline:
+                s.Health = EHostHealthView::TemporaryOffline;
+                break;
+            case EHostHealth::Offline:
+                s.Health = EHostHealthView::Offline;
+                break;
+        }
+        for (size_t op = 0; op < OperationCount; ++op) {
+            s.InflightByOp[op] =
+                HostStatistics[host].InflightCount(static_cast<EOperation>(op));
+        }
+        s.Errors = HostStatistics[host].GetErrorsInfo(now);
+        out.push_back(std::move(s));
+    }
+    return out;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 
 }   // namespace NYdb::NBS::NBlockStore::NStorage::NPartitionDirect

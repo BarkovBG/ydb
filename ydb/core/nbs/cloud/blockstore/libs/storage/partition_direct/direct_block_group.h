@@ -216,6 +216,11 @@ public:
 
     // Query dump for DirectBlockGroup and VChunks.
     virtual NThreading::TFuture<TDBGDumpResponse> Dump() = 0;
+
+    // Read-only structured snapshot of this DBG (connections, oracle host
+    // state, per-vchunk dirty-map state) for the tablet monitoring UI.
+    // Resolves on the executor thread.
+    virtual NThreading::TFuture<TDbgSnapshot> GatherMonSnapshot() = 0;
 };
 
 using IDirectBlockGroupPtr = std::shared_ptr<IDirectBlockGroup>;

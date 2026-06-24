@@ -325,6 +325,11 @@ NThreading::TFuture<TDBGDumpResponse> TDirectBlockGroupMock::Dump()
     return DumpHandler();
 }
 
+NThreading::TFuture<TDbgSnapshot> TDirectBlockGroupMock::GatherMonSnapshot()
+{
+    return NThreading::MakeFuture(TDbgSnapshot{});
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 
 }   // namespace NYdb::NBS::NBlockStore::NStorage::NPartitionDirect

@@ -5,6 +5,7 @@
 
 #include <ydb/core/nbs/cloud/blockstore/libs/common/block_range_map.h>
 #include <ydb/core/nbs/cloud/blockstore/libs/storage/partition_direct/model/host_mask.h>
+#include <ydb/core/nbs/cloud/blockstore/libs/storage/partition_direct/monitoring/mon_snapshot.h>
 
 #include <library/cpp/threading/future/core/future.h>
 
@@ -265,6 +266,13 @@ public:
     [[nodiscard]] std::optional<ui64> GetSafeBarrierForErase() const;
     [[nodiscard]] const TPBufferCounters& GetPBufferCounters(
         THostIndex host) const;
+
+    // Read-only snapshots for the tablet monitoring UI.
+    [[nodiscard]] TDirtyMapCountsView GetCountsSnapshot() const;
+    [[nodiscard]] TVector<TDDiskStateView> GetDDiskStatesSnapshot() const;
+    [[nodiscard]] TVector<TPBufferCountersView>
+    GetPBufferCountersSnapshot() const;
+    [[nodiscard]] size_t GetHostCount() const;
 
     // ILockableRanges implementation
     void LockPBuffer(ui64 lsn) override;
