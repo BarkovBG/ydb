@@ -217,6 +217,11 @@ public:
     // Query dump for DirectBlockGroup and VChunks.
     virtual NThreading::TFuture<TDBGDumpResponse> Dump() = 0;
 
+    // Read-only structured snapshot of this DBG (connections, oracle host
+    // state, per-vchunk dirty-map state) for the tablet monitoring UI.
+    // Resolves on the executor thread.
+    virtual NThreading::TFuture<TDbgSnapshot> GatherMonSnapshot() = 0;
+
     // Append a new host at index newHostIndex (== current host count) using
     // the provided DDisk and PBuffer ids. Every registered VChunk is notified
     // (it appends the host as an idle spare and grows its dirty map); Oracle's

@@ -325,6 +325,11 @@ NThreading::TFuture<TDBGDumpResponse> TDirectBlockGroupMock::Dump()
     return DumpHandler();
 }
 
+NThreading::TFuture<TDbgSnapshot> TDirectBlockGroupMock::GatherMonSnapshot()
+{
+    return NThreading::MakeFuture(TDbgSnapshot{});
+}
+
 void TDirectBlockGroupMock::AddHost(
     THostIndex newHostIndex,
     NKikimrBlobStorage::NDDisk::TDDiskId ddiskId,

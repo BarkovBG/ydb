@@ -1065,6 +1065,71 @@ NThreading::TFuture<TDBGDumpResponse> TDirectBlockGroup::Dump()
     return future;
 }
 
+NThreading::TFuture<TDbgSnapshot> TDirectBlockGroup::GatherMonSnapshot()
+{
+    auto promise = NewPromise<TDbgSnapshot>();
+    auto future = promise.GetFuture();
+    Executor->ExecuteSimple(
+        [weakSelf = weak_from_this(),
+         index = DirectBlockGroupIndex,
+         promise = std::move(promise)]   //
+        () mutable
+        {
+            if (auto self = weakSelf.lock()) {
+                promise.SetValue(self->DoBuildMonSnapshot());
+            } else {
+                promise.SetValue(TDbgSnapshot{.Index = index});
+            }
+        });
+
+    return future;
+}
+
+TDbgSnapshot TDirectBlockGroup::DoBuildMonSnapshot()
+{
+    Y_ABORT_UNLESS(ExecutorThreadChecker.Check());
+
+    TDbgSnapshot s;
+    s.Index = DirectBlockGroupIndex;
+
+    const size_t hostCount = DDiskConnections.size();
+    s.Connections.reserve(hostCount);
+    for (size_t host = 0; host < hostCount; ++host) {
+        TConnSnapshot c;
+        c.HostIndex = static_cast<THostIndex>(host);
+        switch (DDiskConnections[host].SessionState) {
+            case EDDiskSessionState::NotLocked:
+                c.DDiskSession = "NotLocked";
+                break;
+            case EDDiskSessionState::Locked:
+                c.DDiskSession = "Locked";
+                break;
+            case EDDiskSessionState::Broken:
+                c.DDiskSession = "Broken";
+                break;
+        }
+        c.DDiskId =
+            DDiskConnections[host].HostConnection.DDiskId.ToString();
+        if (host < PBufferConnections.size()) {
+            c.PBufferId =
+                PBufferConnections[host].HostConnection.DDiskId.ToString();
+            c.PBufferConnected =
+                PBufferConnections[host].GetFuture().HasValue();
+        }
+        s.Connections.push_back(std::move(c));
+    }
+
+    s.Hosts = Oracle.BuildHostSnapshots(TInstant::Now());
+
+    s.VChunks.reserve(VChunks.size());
+    for (const auto& weakVChunk: VChunks) {
+        if (auto vChunk = weakVChunk.lock()) {
+            s.VChunks.push_back(vChunk->BuildSnapshot());
+        }
+    }
+    return s;
+}
+
 void TDirectBlockGroup::SetHostState(
     THostIndex hostIndex,
     EHostState oldState,

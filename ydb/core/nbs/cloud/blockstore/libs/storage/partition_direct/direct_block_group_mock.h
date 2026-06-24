@@ -212,6 +212,8 @@ public:
 
     NThreading::TFuture<TDBGDumpResponse> Dump() override;
 
+    NThreading::TFuture<TDbgSnapshot> GatherMonSnapshot() override;
+
     using TAddHostHandler = std::function<void(
         THostIndex newHostIndex,
         NKikimrBlobStorage::NDDisk::TDDiskId ddiskId,
