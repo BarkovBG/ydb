@@ -777,6 +777,14 @@ STFUNC(TPartitionActor::StateWork)
             HandleFastPathServiceReady);
         HFunc(TEvPartitionDirectPrivate::TEvAddHostToDBG, HandleAddHostToDBG);
 
+        HFunc(NMon::TEvRemoteHttpInfo, HandleHttpInfo);
+        HFunc(
+            TEvPartitionDirectPrivate::TEvMonSnapshotReady,
+            HandleMonSnapshotReady);
+        HFunc(
+            TEvPartitionDirectPrivate::TEvMonRenderTimeout,
+            HandleMonRenderTimeout);
+
         default:
             if (!HandleDefaultEvents(ev, SelfId())) {
                 LOG_DEBUG_S(

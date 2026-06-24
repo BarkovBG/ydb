@@ -13,6 +13,7 @@ SRCS(
     load_actor_adapter.cpp
     monitoring/mon_render.cpp
     part_addhosttodbg.cpp
+    part_monitoring.cpp
     part_database.cpp
     part_initschema.cpp
     part_loadstate.cpp
@@ -50,6 +51,7 @@ PEERDIR(
     ydb/core/mind/bscontroller
     contrib/libs/opentelemetry-proto
 
+    library/cpp/cgiparam
     library/cpp/monlib/service/pages
 )
 

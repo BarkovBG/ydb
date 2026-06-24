@@ -9,6 +9,7 @@
 #include <ydb/core/nbs/cloud/blockstore/libs/storage/core/tablet.h>
 #include <ydb/core/nbs/cloud/blockstore/libs/storage/model/log_title.h>
 #include <ydb/core/nbs/cloud/blockstore/libs/storage/partition_direct/model/host.h>
+#include <ydb/core/nbs/cloud/blockstore/libs/storage/partition_direct/monitoring/mon_snapshot.h>
 
 #include <ydb/core/nbs/cloud/storage/core/libs/common/error.h>
 #include <ydb/core/nbs/cloud/storage/core/libs/coroutine/executor_pool.h>
@@ -21,6 +22,8 @@
 #include <ydb/core/tablet_flat/tablet_flat_executed.h>
 
 #include <ydb/library/services/services.pb.h>
+
+#include <ydb/library/actors/core/mon.h>
 
 #include <util/generic/hash.h>
 
@@ -73,6 +76,22 @@ private:
     };
 
     THashMap<size_t, TAddHostInFlight> AddHostsInFlight;
+
+    // One in-flight monitoring (read-only) request: joins the local-DB read
+    // (TTxMonitoring) with the async runtime snapshot, then renders + replies.
+    struct TMonRequest
+    {
+        NActors::TActorId Requester;
+        TCgiFilters Filters;
+        TDbContents Db;
+        std::optional<TMonSnapshot> Runtime;
+        std::optional<TString> RuntimeError;
+        bool DbReady = false;
+        bool Replied = false;
+    };
+
+    ui64 MonCookieCounter = 0;
+    THashMap<ui64, TMonRequest> MonRequests;
 
 public:
     TPartitionActor(
@@ -157,6 +176,20 @@ private:
         size_t dbgId,
         ui32 errorCode,
         TString message);
+
+    // Read-only tablet monitoring page (see part_monitoring.cpp).
+    void HandleHttpInfo(
+        NActors::NMon::TEvRemoteHttpInfo::TPtr& ev,
+        const NActors::TActorContext& ctx);
+    void HandleMonSnapshotReady(
+        const TEvPartitionDirectPrivate::TEvMonSnapshotReady::TPtr& ev,
+        const NActors::TActorContext& ctx);
+    void HandleMonRenderTimeout(
+        const TEvPartitionDirectPrivate::TEvMonRenderTimeout::TPtr& ev,
+        const NActors::TActorContext& ctx);
+    // Renders and replies once both the DB read and the runtime snapshot (or
+    // its error/timeout) are available.
+    void MaybeReplyMon(const NActors::TActorContext& ctx, ui64 cookie);
 
     void Start(
         const NActors::TActorContext& ctx,
