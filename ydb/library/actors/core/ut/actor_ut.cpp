@@ -754,6 +754,9 @@ Y_UNIT_TEST_SUITE(TestAliases) {
     }
 }
 
+            SendActorLivenessCheck(Target, AliveCookie);
+            SendActorLivenessCheck(Target, DeadCookie);
+            SendActorLivenessCheck(Target, Cookie);
 Y_UNIT_TEST_SUITE(TestThreadContextQueueTimestamps) {
     using namespace NThreading;
 
