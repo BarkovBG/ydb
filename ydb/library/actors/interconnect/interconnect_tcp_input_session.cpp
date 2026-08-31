@@ -329,7 +329,9 @@ namespace NActors {
         while (!EarlyRdmaRecvs.empty()) {
             auto pending = std::move(EarlyRdmaRecvs.front());
             EarlyRdmaRecvs.pop_front();
-            TInputSessionTCP::WorkingState(pending);
+            if (!ProcessWorkingEvent(pending)) {
+                return;
+            }
         }
         Become(&TInterconnectSessionRdma::WorkingState);
     }
@@ -339,12 +341,18 @@ namespace NActors {
     }
 
     STATEFN(TInputSessionTCP::WorkingState) {
+        ProcessWorkingEvent(ev);
+    }
+
+    bool TInputSessionTCP::ProcessWorkingEvent(TAutoPtr<IEventHandle>& ev) {
         std::unique_ptr<IEventBase> termEv;
 
         if (Context->Terminated) {
-            return PassAway();
+            PassAway();
+            return false;
         }
 
+        const bool poisonPill = ev->GetTypeRewrite() == TEvents::TSystem::PoisonPill;
         try {
             WorkingStateImpl(ev);
         } catch (const TExReestablishConnection& ex) {
@@ -364,7 +372,10 @@ namespace NActors {
             Send(SessionId, termEv.release());
             PassAway();
             Socket.Reset();
+            return false;
         }
+
+        return !poisonPill;
     }
 
     void TInputSessionTCP::CloseInputSession() {
