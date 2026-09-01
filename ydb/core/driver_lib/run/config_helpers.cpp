@@ -120,6 +120,21 @@ void AddExecutorPool(NActors::TCpuManagerConfig& cpuManager, const NKikimrConfig
     }
 }
 
+
+
+}
+
+
+}
+
+}
+
+TVector<ui32> GetInterconnectSessionExecutorPoolIds(
+        const NKikimrConfig::TActorSystemConfig& systemConfig) {
+    const auto& poolIds = systemConfig.GetInterconnectSessionExecutor();
+    return TVector<ui32>(poolIds.begin(), poolIds.end());
+}
+
 NActors::TSchedulerConfig CreateSchedulerConfig(const NKikimrConfig::TActorSystemConfig::TScheduler& config) {
     const ui64 resolution = config.HasResolution() ? config.GetResolution() : 1024;
     Y_DEBUG_ABORT_UNLESS((resolution & (resolution - 1)) == 0);  // resolution must be power of 2

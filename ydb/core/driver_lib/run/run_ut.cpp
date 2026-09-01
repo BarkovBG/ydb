@@ -104,3 +104,80 @@ Y_UNIT_TEST(CanNotSetGrpcXdsBootstrapConfigEnvIfVariableAlreadySet) {
 }
 
 } // XdsBootstrapConfigInitializer
+
+
+
+    }
+}
+
+}
+
+}
+
+    }
+}
+
+    NKikimrConfig::TActorSystemConfig systemConfig;
+
+
+
+
+}
+
+    NKikimrConfig::TActorSystemConfig systemConfig;
+
+
+
+
+
+}
+
+Y_UNIT_TEST(InterconnectSessionExecutorsReferencePoolList) {
+    NKikimrConfig::TActorSystemConfig systemConfig;
+
+    for (const TString& name : {"System", "BS0", "BS1", "ICSession"}) {
+        auto* executor = AddExecutor(systemConfig, TExecutorConfig::BASIC, name);
+        executor->SetThreads(1);
+    }
+
+    systemConfig.AddInterconnectSessionExecutor(3);
+    systemConfig.AddInterconnectSessionExecutor(2);
+
+    UNIT_ASSERT_VALUES_EQUAL(
+        NActorSystemConfigHelpers::GetInterconnectSessionExecutorPoolIds(systemConfig),
+        (TVector<ui32>{3, 2}));
+}
+
+Y_UNIT_TEST(InterconnectSessionExecutorPoolListIsEmptyByDefault) {
+    NKikimrConfig::TActorSystemConfig systemConfig;
+
+    auto* system = AddExecutor(systemConfig, TExecutorConfig::BASIC, "System");
+    system->SetThreads(1);
+
+    UNIT_ASSERT(NActorSystemConfigHelpers::GetInterconnectSessionExecutorPoolIds(systemConfig).empty());
+}
+
+    NKikimrConfig::TActorSystemConfig systemConfig;
+
+    auto* system = AddExecutor(systemConfig, TExecutorConfig::BASIC, "System");
+
+
+
+
+
+
+
+
+
+
+
+}
+
+    NKikimrConfig::TActorSystemConfig systemConfig;
+
+
+
+
+
+}
+
