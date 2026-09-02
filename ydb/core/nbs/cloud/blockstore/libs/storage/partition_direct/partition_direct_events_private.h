@@ -40,6 +40,7 @@ struct TEvPartitionDirectPrivate
         EvFastPathServiceStopped,
         EvPoisonByBlockedGeneration,
         EvAddHostToDBG,
+        EvRemoveHostFromDBG,
         EvPartitionCleanupCompleted,
 
         EvEnd,
@@ -114,6 +115,21 @@ struct TEvPartitionDirectPrivate
 
         TEvAddHostToDBG(size_t dbgId, ui64 generation)
             : DirectBlockGroupId(dbgId)
+            , Generation(generation)
+        {}
+    };
+
+    // Asks the partition to durably remove the host from the group.
+    struct TEvRemoveHostFromDBG
+        : public NActors::TEventLocal<TEvRemoveHostFromDBG, EvRemoveHostFromDBG>
+    {
+        const size_t DirectBlockGroupId;
+        const size_t HostIndex;
+        const ui64 Generation;
+
+        TEvRemoveHostFromDBG(size_t dbgId, size_t hostIndex, ui64 generation)
+            : DirectBlockGroupId(dbgId)
+            , HostIndex(hostIndex)
             , Generation(generation)
         {}
     };

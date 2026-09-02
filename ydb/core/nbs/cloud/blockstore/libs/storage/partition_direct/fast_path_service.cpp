@@ -447,6 +447,19 @@ void TFastPathService::QueryAddHost(size_t directBlockGroupId, ui64 generation)
     ActorSystem->Send(PartitionActorId, event.release());
 }
 
+void TFastPathService::QueryRemoveHost(
+    size_t directBlockGroupId,
+    size_t hostIndex,
+    ui64 generation)
+{
+    auto event =
+        std::make_unique<TEvPartitionDirectPrivate::TEvRemoveHostFromDBG>(
+            directBlockGroupId,
+            hostIndex,
+            generation);
+    ActorSystem->Send(PartitionActorId, event.release());
+}
+
 ui64 TFastPathService::GenerateLsn()
 {
     const ui64 lsn = ++SequenceGenerator;

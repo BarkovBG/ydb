@@ -59,6 +59,13 @@ struct IPartitionDirectService
     // generation the caller decided on; a stale one is rejected.
     virtual void QueryAddHost(size_t directBlockGroupId, ui64 generation) = 0;
 
+    // Query the removal of the host in that slot. `generation` is the
+    // membership generation the caller decided on; a stale one is rejected.
+    virtual void QueryRemoveHost(
+        size_t directBlockGroupId,
+        size_t hostIndex,
+        ui64 generation) = 0;
+
     // Generates the next tablet-wide write LSN. Called by a vchunk on its
     // executor thread when it starts processing a write, so generation and
     // dirty-map registration happen on the same thread. Also drives periodic

@@ -138,6 +138,11 @@ public:
 
     void QueryAddHost(size_t directBlockGroupId, ui64 generation) override;
 
+    void QueryRemoveHost(
+        size_t directBlockGroupId,
+        size_t hostIndex,
+        ui64 generation) override;
+
     ui64 GenerateLsn() override;
 
     void StopTablet(const TString& reason) override;

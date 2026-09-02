@@ -21,6 +21,13 @@ struct TPartitionDirectServiceMock: public IPartitionDirectService
         ui64 Generation = 0;
     };
 
+    struct TRemoveHostRequest
+    {
+        size_t DirectBlockGroupId = 0;
+        size_t HostIndex = 0;
+        ui64 Generation = 0;
+    };
+
     struct TUpdateConfigRequest
     {
         NStorage::NPartitionDirect::TVChunkConfig Config;
@@ -41,6 +48,7 @@ struct TPartitionDirectServiceMock: public IPartitionDirectService
     TVolumeConfigPtr VolumeConfig;
     bool DropScheduledCallbacks = false;
     TVector<TAddHostRequest> AddHostRequests;
+    TVector<TRemoveHostRequest> RemoveHostRequests;
     ui64 LsnGenerator = 0;
     size_t BlockedGenerationCount = 0;
     TString LastBlockedReason;
@@ -91,6 +99,17 @@ struct TPartitionDirectServiceMock: public IPartitionDirectService
     {
         AddHostRequests.push_back(TAddHostRequest{
             .DirectBlockGroupId = directBlockGroupId,
+            .Generation = generation});
+    }
+
+    void QueryRemoveHost(
+        size_t directBlockGroupId,
+        size_t hostIndex,
+        ui64 generation) override
+    {
+        RemoveHostRequests.push_back(TRemoveHostRequest{
+            .DirectBlockGroupId = directBlockGroupId,
+            .HostIndex = hostIndex,
             .Generation = generation});
     }
 
