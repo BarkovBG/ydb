@@ -2099,6 +2099,7 @@ void TPDisk::EnsureSharedUringRouter(ui32 idleSpinUs) {
 
     SharedUringRouter = std::move(router);
 #else
+    Y_UNUSED(idleSpinUs);
     Mon.FallbackPDiskCount->Inc();
 #endif
 }
