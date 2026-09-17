@@ -145,6 +145,50 @@ namespace NKikimr::NStorage {
             pdiskConfig->FeatureFlags.SetEnablePDiskDataEncryption(!pdiskConfig->SectorMap);
         }
 
+        const bool hasChunkSize = (pdisk.HasPDiskConfig() && pdisk.GetPDiskConfig().HasChunkSize())
+            || Cfg->PDiskConfigOverlay.HasChunkSize();
+        if (hasChunkSize && pdiskConfig->PhysicalChunkSize) {
+            const TString warning = TStringBuilder()
+                << "PDiskConfig has both ChunkSize and PhysicalChunkSize; "
+                << "ignoring PhysicalChunkSize, the physical size is derived from ChunkSize"
+                << " ChunkSize# " << pdiskConfig->ChunkSize
+                << " PhysicalChunkSize# " << pdiskConfig->PhysicalChunkSize;
+            YDB_LOG_WARN("PDiskConfig has both ChunkSize and PhysicalChunkSize",
+                {"marker", "NW119"},
+                {"PDiskId", pdiskID},
+                {"path", path},
+                {"chunkSize", pdiskConfig->ChunkSize},
+                {"physicalChunkSize", pdiskConfig->PhysicalChunkSize});
+            if (configWarning && configWarning->empty()) {
+                *configWarning = warning;
+            }
+            pdiskConfig->PhysicalChunkSize = 0;
+        }
+
+            const TString warning = TStringBuilder()
+                {"PDiskId", pdiskID},
+                {"path", path},
+                *configWarning = warning;
+            }
+        }
+            const TString warning = TStringBuilder()
+                {"PDiskId", pdiskID},
+                {"path", path},
+            if (configWarning && configWarning->empty()) {
+                *configWarning = warning;
+            }
+        }
+
+            }
+
+            }
+
+                {"PDiskId", pdiskID},
+                {"path", path},
+            if (configWarning && configWarning->empty()) {
+            }
+        }
+
         auto inferSettings = TInferPDiskSlotCountSettingsForDriveType(InferPDiskSlotCountSettings, deviceType);
         if (!inferSettings) {
             YDB_LOG_DEBUG("Inferring PDisk slot count not configured",

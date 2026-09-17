@@ -99,4 +99,11 @@ message TPDiskConfig {
     optional bool SeparateHugePriorities = 2007;
     optional bool UseBytesFlightControl = 2008;
     optional uint32 IoPieceSizeBytes = 2009;
+
+    // Physical (on-device) chunk size, including the per-sector PDisk metadata. An alternative to
+    // ChunkSize, which is the user-accessible size the physical one is derived from; setting both is
+    // a misconfiguration and ChunkSize wins. Must be a multiple of ChunkSizeAlignment (2 MiB).
+    // Takes effect only when the disk is formatted; the resulting size is persisted in the format
+    // record, so changing or removing this option later has no effect on an already formatted disk.
+    optional uint32 PhysicalChunkSize = 2013;
 };
