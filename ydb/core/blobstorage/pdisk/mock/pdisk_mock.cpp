@@ -762,7 +762,17 @@ public:
                 {"msg", msg->ToString()},
                 {"VDiskId", owner.VDiskId});
             for (const TChunkIdx chunkIdx : msg->ForgetChunks) {
-                Impl.DeleteChunk(owner, chunkIdx);
+                if (msg->IsDDisk && !owner.ReservedChunks.contains(chunkIdx)) {
+                    status = NKikimrProto::ERROR;
+                    errorReason = TStringBuilder() << "Can't forget chunkIdx# " << chunkIdx
+                        << ": chunk is not reserved or decommitted by this owner";
+                    break;
+                }
+            }
+            if (status == NKikimrProto::OK) {
+                for (const TChunkIdx chunkIdx : msg->ForgetChunks) {
+                    Impl.DeleteChunk(owner, chunkIdx);
+                }
             }
         }
         Send(ev->Sender, new NPDisk::TEvChunkForgetResult(status, {}, errorReason), 0, ev->Cookie);
@@ -1300,7 +1310,8 @@ public:
     }
 
     void ErrorHandle(NPDisk::TEvChunkForget::TPtr &ev) {
-        Send(ev->Sender, new NPDisk::TEvChunkForgetResult(NKikimrProto::CORRUPTED, 0, State->GetStateErrorReason()));
+        Send(ev->Sender, new NPDisk::TEvChunkForgetResult(NKikimrProto::CORRUPTED, 0, State->GetStateErrorReason()),
+            0, ev->Get()->IsDDisk ? ev->Cookie : 0);
     }
 
     void ErrorHandle(NPDisk::TEvYardControl::TPtr &ev) {
