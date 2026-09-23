@@ -211,8 +211,8 @@ Y_UNIT_TEST_SUITE(TWriteRequestTest)
         UNIT_ASSERT_VALUES_EQUAL(
             "[H1,H3,H4]",
             response.CompletedWrites.Print());
-        // H1 holds a copy, but its indirect write is still in flight.
-        UNIT_ASSERT_VALUES_EQUAL("[H3,H4]", response.AnsweredWrites.Print());
+        // H1 holds a copy, but its indirect write is still in flight: it is
+        // not reported until that write answers too.
         UNIT_ASSERT_VALUES_EQUAL(
             "[]",
             WriteClient->BelatedCompletedWrites.Print());
@@ -222,9 +222,6 @@ Y_UNIT_TEST_SUITE(TWriteRequestTest)
         UNIT_ASSERT_VALUES_EQUAL(
             "[H1]",
             WriteClient->BelatedCompletedWrites.Print());
-        UNIT_ASSERT_VALUES_EQUAL(
-            "[]",
-            WriteClient->BelatedFailedWrites.Print());
 
         ManyPBufferCallback(CreateOneOkResponse(THostIndex{0}));
         ManyPBufferCallback(CreateOneOkResponse(THostIndex{2}));

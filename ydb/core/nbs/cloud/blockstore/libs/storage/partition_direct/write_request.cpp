@@ -424,29 +424,25 @@ void TWriteRequestExecutor::Reply(NProto::TError error)
     Bundle->Reply(
         std::move(error),
         RequestedDirectWrites.Include(RequestedIndirectWrites),
-        CompletedWrites,
-        GetFullyAnsweredHosts());
+        CompletedWrites);
 }
 
 void TWriteRequestExecutor::NotifyBelated(THostMask fullyAnsweredHosts)
 {
-    if (fullyAnsweredHosts.Empty()) {
+    const auto completed = fullyAnsweredHosts.LogicalAnd(CompletedWrites);
+    if (completed.Empty()) {
         return;
     }
-
-    const auto completed = fullyAnsweredHosts.LogicalAnd(CompletedWrites);
-    const auto failed = fullyAnsweredHosts.Exclude(CompletedWrites);
 
     LOG_DEBUG(
         *ActorSystem,
         NKikimrServices::NBS_PARTITION,
-        "%s NotifyBelated %s ok:%s failed:%s",
+        "%s NotifyBelated %s ok:%s",
         LogTitle.GetWithTime().c_str(),
         ExtendedDebugState().c_str(),
-        completed.Print().c_str(),
-        failed.Print().c_str());
+        completed.Print().c_str());
 
-    Bundle->NotifyBelated(completed, failed);
+    Bundle->NotifyBelated(completed);
 }
 
 void TWriteRequestExecutor::ScheduleHedging(TDuration hedgingDelay)

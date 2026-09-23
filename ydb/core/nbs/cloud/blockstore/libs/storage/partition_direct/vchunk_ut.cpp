@@ -178,7 +178,7 @@ Y_UNIT_TEST_SUITE(TVChunkTest)
     // that did land are still on the PBuffers. The record is kept until they
     // are erased: forgetting it right away would leave a copy that a restart
     // restores and flushes over newer data.
-    Y_UNIT_TEST_F(ShouldEraseCopiesOfWriteWithoutQuorum, TBaseFixture)
+    Y_UNIT_TEST_F(ShouldForgetWriteWithoutQuorumUnderBarrier, TBaseFixture)
     {
         Init();
 
@@ -233,49 +233,38 @@ Y_UNIT_TEST_SUITE(TVChunkTest)
             GetSafeBarrierOnExecutor(DirectBlockGroup->GetExecutor(), *vchunk)
                 ->Print());
 
-        // The scheduled cleanup erases the copies.
+        // No host confirmed a copy, so nothing is erased by address: the
+        // desired hosts answered with an error and the two handoffs, written
+        // by the hedge, are still in flight. The record waits for the vchunk
+        // barrier, which is persisted with the dirty map state.
+        DrainExecutor(DirectBlockGroup->GetExecutor());
         UNIT_ASSERT_VALUES_EQUAL(
-            true,
-            WaitScheduledTasks(1, TDuration::Seconds(10)));
-        RunScheduledTasks();
-
-        // Erase goes to every host that was asked to write. Besides the three
-        // desired ones these are the two handoffs: each failed desired write
-        // sent a write to a secondary PBuffer, and those writes are still in
-        // flight.
+            1,
+            PartitionDirectService->UpdateDirtyMapStateRequests.size());
+        const auto& persisted =
+            PartitionDirectService->UpdateDirtyMapStateRequests.back().Proto;
+        UNIT_ASSERT_VALUES_EQUAL(MakeKey(123).Lsn, persisted.GetBarrierLsn());
         UNIT_ASSERT_VALUES_EQUAL(
-            true,
-            WaitEraseRequests(5, TDuration::Seconds(10)));
-        SetEraseResult(TDBGEraseResponse{.Error = MakeError(S_OK)}, true);
-
-        // The handoffs have not answered their write yet: their copies may
-        // still land, so the record stays and keeps holding the barrier.
+            MakeKey(123).Generation,
+            persisted.GetBarrierGeneration());
         UNIT_ASSERT_VALUES_EQUAL(
             MakeKey(123).Print(),
             GetSafeBarrierOnExecutor(DirectBlockGroup->GetExecutor(), *vchunk)
                 ->Print());
 
-        // They answer with an error. That does not prove that nothing landed,
-        // so the erases confirmed before those answers do not count and go
-        // again.
-        SetWriteResult(
-            TDBGWriteBlocksResponse{.Error = MakeError(E_IO, "disk error")},
-            true);
-
-        UNIT_ASSERT_VALUES_EQUAL(
-            true,
-            WaitScheduledTasks(1, TDuration::Seconds(10)));
-        RunScheduledTasks();
-
-        UNIT_ASSERT_VALUES_EQUAL(
-            true,
-            WaitEraseRequests(2, TDuration::Seconds(10)));
-        SetEraseResult(TDBGEraseResponse{.Error = MakeError(S_OK)}, true);
-
-        // Only now the record leaves the dirty map and releases the barrier.
+        // Once the barrier is persisted the record leaves the dirty map and
+        // releases the cleanup barrier.
+        UNIT_ASSERT_VALUES_EQUAL(1, ReplyUpdateDirtyMapStateRequests());
+        DrainExecutor(DirectBlockGroup->GetExecutor());
         UNIT_ASSERT(
             !GetSafeBarrierOnExecutor(DirectBlockGroup->GetExecutor(), *vchunk)
                  .has_value());
+
+        // The handoffs answer with an error after that: nothing to report.
+        SetWriteResult(
+            TDBGWriteBlocksResponse{.Error = MakeError(E_IO, "disk error")},
+            true);
+        DrainExecutor(DirectBlockGroup->GetExecutor());
 
         vchunk->Stop().GetValue(TDuration::Seconds(10));
     }

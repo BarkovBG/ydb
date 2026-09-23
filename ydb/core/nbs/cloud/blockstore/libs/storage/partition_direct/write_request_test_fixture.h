@@ -11,9 +11,7 @@ namespace NYdb::NBS::NBlockStore::NStorage::NPartitionDirect {
 struct TWriteClientMock: IWriteClient
 {
     THostMask AllCompletedWrites;
-    THostMask AllFailedWrites;
     THostMask BelatedCompletedWrites;
-    THostMask BelatedFailedWrites;
     std::optional<TWriteRequestResponse> Response;
 
     void OnWriteBlocksResponse(
@@ -22,8 +20,7 @@ struct TWriteClientMock: IWriteClient
 
     void OnBelatedWriteBlocksResponse(
         std::shared_ptr<TWriteRequestBundle> bundle,
-        THostMask completedWrites,
-        THostMask failedWrites) override;
+        THostMask completedWrites) override;
 };
 
 ////////////////////////////////////////////////////////////////////////////////

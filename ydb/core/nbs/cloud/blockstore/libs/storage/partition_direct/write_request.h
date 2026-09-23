@@ -56,8 +56,8 @@ private:
 
     // A host is fully answered when every write sent to it has answered:
     // a hedged direct write and the indirect one can both be in flight.
-    // Only such a host is reported to the record, with the best of its
-    // outcomes, so that a copy cannot land after the record forgot the host.
+    // Only such a confirmed host is reported to the record, so that a copy
+    // cannot land after the record erased the host.
     void MaybeReplyOrNotifyBelated(THostMask fullyAnsweredHosts);
     void Reply(NProto::TError error);
     void NotifyBelated(THostMask fullyAnsweredHosts);

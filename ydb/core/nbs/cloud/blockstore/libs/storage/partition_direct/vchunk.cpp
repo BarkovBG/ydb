@@ -431,8 +431,7 @@ void TVChunk::OnWriteBlocksResponse(
             response.PBufferKey,
             bundle->GetVChunkRange(),
             response.RequestedWrites,
-            response.CompletedWrites,
-            response.AnsweredWrites);
+            response.CompletedWrites);
     }
 
     bool ok = !HasError(response.Error);
@@ -442,13 +441,14 @@ void TVChunk::OnWriteBlocksResponse(
 
     UpdatePendingCounters();
     DoFlush(false);
+    // A write without quorum may have raised the vchunk barrier.
+    StartPersist();
     ScheduleCleaningUp();
 }
 
 void TVChunk::OnBelatedWriteBlocksResponse(
     std::shared_ptr<TWriteRequestBundle> bundle,
-    THostMask completedWrites,
-    THostMask failedWrites)
+    THostMask completedWrites)
 {
     Y_ABORT_UNLESS(ExecutorThreadChecker.Check());
 
@@ -459,13 +459,9 @@ void TVChunk::OnBelatedWriteBlocksResponse(
         LogTitle.GetWithTime().c_str(),
         bundle->GetVChunkRange().Print().c_str());
 
-    BlocksDirtyMap->OnBelatedWrite(
-        bundle->GetPBufferKey(),
-        completedWrites,
-        failedWrites);
+    BlocksDirtyMap->OnBelatedWrite(bundle->GetPBufferKey(), completedWrites);
 
     DoErase(false);
-    StartPersist();
     ScheduleCleaningUp();
 }
 
@@ -908,6 +904,8 @@ void TVChunk::OnEraseResponse(const TEraseRequestExecutor::TResponse& response)
     }
 
     UpdatePendingCounters();
+    // A record with nothing left to erase may have raised the barrier.
+    StartPersist();
     ScheduleCleaningUp();
 }
 
@@ -985,6 +983,8 @@ void TVChunk::OnDirtyMapPersisted(ui32 stateGeneration, THostMask freshDDisks)
     BlocksDirtyMap->StatePersisted(stateGeneration);
     PersistedFreshDDisks = freshDDisks;
     StartPersist();
+    // The persisted barrier may have forgotten records that gated erases.
+    DoErase(false);
     DemoteUnavailableHostsIfNeeded();
     ScheduleCleaningUp();
 }

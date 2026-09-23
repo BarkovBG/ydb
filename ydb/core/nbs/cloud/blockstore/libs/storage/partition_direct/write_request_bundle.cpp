@@ -42,8 +42,7 @@ TWriteRequestBundle::TWriteRequestBundle(
 void TWriteRequestBundle::Reply(
     NProto::TError error,
     THostMask requestedWrites,
-    THostMask completedWrites,
-    THostMask answeredWrites)
+    THostMask completedWrites)
 {
     SgList.Close();
 
@@ -54,23 +53,19 @@ void TWriteRequestBundle::Reply(
                 .Error = std::move(error),
                 .PBufferKey = PBufferKey,
                 .RequestedWrites = requestedWrites,
-                .CompletedWrites = completedWrites,
-                .AnsweredWrites = answeredWrites});
+                .CompletedWrites = completedWrites});
     } else {
         SendFinalReply(TWriteBlocksLocalResponse{
             .Error = MakeWriteClientDestroyedError()});
     }
 }
 
-void TWriteRequestBundle::NotifyBelated(
-    THostMask completedWrites,
-    THostMask failedWrites)
+void TWriteRequestBundle::NotifyBelated(THostMask completedWrites)
 {
     if (auto client = WriteClient.lock()) {
         client->OnBelatedWriteBlocksResponse(
             shared_from_this(),
-            completedWrites,
-            failedWrites);
+            completedWrites);
     }
 }
 

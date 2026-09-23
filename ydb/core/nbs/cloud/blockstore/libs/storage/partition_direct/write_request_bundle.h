@@ -22,9 +22,6 @@ struct TWriteRequestResponse
     THostMask RequestedWrites;
     // The PBuffer hosts where exactly the data was written and confirmed.
     THostMask CompletedWrites;
-    // The PBuffer hosts with no write request in flight, whatever they
-    // answered. A host outside this mask may still get a copy.
-    THostMask AnsweredWrites;
 };
 
 // The class is designed to store the state during the execution of a write
@@ -47,11 +44,10 @@ public:
     void Reply(
         NProto::TError error,
         THostMask requestedWrites,
-        THostMask completedWrites,
-        THostMask answeredWrites);
-    // Notify VChunk about hosts that answered after the client had been
-    // replied to.
-    void NotifyBelated(THostMask completedWrites, THostMask failedWrites);
+        THostMask completedWrites);
+    // Notify VChunk about hosts that confirmed the write after the client
+    // had been replied to.
+    void NotifyBelated(THostMask completedWrites);
 
     // Respond via Promise to FastPathService.
     void SendFinalReply(TWriteBlocksLocalResponse response);
@@ -86,8 +82,7 @@ struct IWriteClient
 
     virtual void OnBelatedWriteBlocksResponse(
         std::shared_ptr<TWriteRequestBundle> bundle,
-        THostMask completedWrites,
-        THostMask failedWrites) = 0;
+        THostMask completedWrites) = 0;
 };
 
 ////////////////////////////////////////////////////////////////////////////////

@@ -17,14 +17,11 @@ void TWriteClientMock::OnWriteBlocksResponse(
 
 void TWriteClientMock::OnBelatedWriteBlocksResponse(
     std::shared_ptr<TWriteRequestBundle> bundle,
-    THostMask completedWrites,
-    THostMask failedWrites)
+    THostMask completedWrites)
 {
     Y_UNUSED(bundle);
     AllCompletedWrites = AllCompletedWrites.Include(completedWrites);
-    AllFailedWrites = AllFailedWrites.Include(failedWrites);
     BelatedCompletedWrites = BelatedCompletedWrites.Include(completedWrites);
-    BelatedFailedWrites = BelatedFailedWrites.Include(failedWrites);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
