@@ -36,12 +36,10 @@ TInflightInfo::TInflightInfo(TInflightInfo&& other) noexcept
     , Disabled(other.Disabled)
     , WriteRequested(other.WriteRequested)
     , WriteConfirmed(other.WriteConfirmed)
-    , WriteAnswered(other.WriteAnswered)
     , FlushRequested(other.FlushRequested)
     , FlushConfirmed(other.FlushConfirmed)
     , EraseRequested(other.EraseRequested)
     , EraseConfirmed(other.EraseConfirmed)
-    , EraseSentBeforeAnswer(other.EraseSentBeforeAnswer)
 {
     other.ReadyQueue = nullptr;
     other.PBuffersLockCount = 0;
@@ -73,7 +71,6 @@ void TInflightInfo::RestorePBuffer(THostIndex host)
 
     WriteRequested.Set(host);
     WriteConfirmed.Set(host);
-    WriteAnswered.Set(host);
 
     ApplyBytes(host, IReadyQueue::EPBufferCounter::Total, true);
 
@@ -92,8 +89,7 @@ void TInflightInfo::RestorePBuffer(THostIndex host)
 
 void TInflightInfo::OnWritten(
     THostMask writeRequested,
-    THostMask writeConfirmed,
-    THostMask writeAnswered)
+    THostMask writeConfirmed)
 {
     Y_ABORT_UNLESS(State == EState::PBufferPendingWrite);
     Y_ABORT_UNLESS(WriteConfirmed.Count() == 0);
@@ -101,7 +97,6 @@ void TInflightInfo::OnWritten(
 
     WriteRequested = writeRequested;
     WriteConfirmed = writeConfirmed;
-    WriteAnswered = writeAnswered;
     SetState(EState::PBufferWritten);
 
     ApplyBytes(WriteRequested, IReadyQueue::EPBufferCounter::Total, true);
@@ -110,8 +105,7 @@ void TInflightInfo::OnWritten(
 
 void TInflightInfo::OnWriteWithoutQuorum(
     THostMask writeRequested,
-    THostMask writeConfirmed,
-    THostMask writeAnswered)
+    THostMask writeConfirmed)
 {
     Y_ABORT_UNLESS(State == EState::PBufferPendingWrite);
     Y_ABORT_UNLESS(WriteConfirmed.Count() == 0);
@@ -119,7 +113,6 @@ void TInflightInfo::OnWriteWithoutQuorum(
 
     WriteRequested = writeRequested;
     WriteConfirmed = writeConfirmed;
-    WriteAnswered = writeAnswered;
     SetState(EState::PBufferDiscarded);
 
     ApplyBytes(WriteRequested, IReadyQueue::EPBufferCounter::Total, true);
@@ -127,25 +120,13 @@ void TInflightInfo::OnWriteWithoutQuorum(
     MaybeQueryErase();
 }
 
-void TInflightInfo::OnBelatedWrite(THostMask completed, THostMask failed)
+void TInflightInfo::OnBelatedWrite(THostMask completed)
 {
-    const auto answered = completed.Include(failed);
-    Y_ABORT_UNLESS(completed.LogicalAnd(failed).Empty());
-    Y_ABORT_UNLESS(answered.Exclude(WriteRequested).Empty());
+    Y_ABORT_UNLESS(completed.Exclude(WriteRequested).Empty());
     Y_ABORT_UNLESS(State != EState::PBufferErased);
 
     WriteConfirmed = WriteConfirmed.Include(completed);
-    WriteAnswered = WriteAnswered.Include(answered);
 
-    const auto eraseDone = answered.LogicalAnd(EraseConfirmed);
-    const auto eraseInFlight =
-        answered.LogicalAnd(EraseRequested).Exclude(EraseConfirmed);
-
-    EraseSentBeforeAnswer = EraseSentBeforeAnswer.Include(eraseInFlight);
-    EraseRequested = EraseRequested.Exclude(eraseDone);
-    EraseConfirmed = EraseConfirmed.Exclude(eraseDone);
-
-    MaybeAdvanceToErased();
     MaybeQueryErase();
 }
 
@@ -260,7 +241,7 @@ THostMask TInflightInfo::GetInflightFlushes() const
 void TInflightInfo::RequestErase(THostIndex host)
 {
     Y_ABORT_UNLESS(CanErase());
-    Y_ABORT_UNLESS(WriteRequested.Get(host));
+    Y_ABORT_UNLESS(WriteConfirmed.Get(host));
     Y_ABORT_UNLESS(!EraseRequested.Get(host));
     Y_ABORT_UNLESS(!EraseConfirmed.Get(host));
     Y_ABORT_UNLESS(PBuffersLockCount == 0);
@@ -274,11 +255,6 @@ void TInflightInfo::ConfirmErase(THostIndex host)
     Y_ABORT_UNLESS(EraseRequested.Get(host));
     Y_ABORT_UNLESS(!EraseConfirmed.Get(host));
     Y_ABORT_UNLESS(PBuffersLockCount == 0);
-
-    if (EraseSentBeforeAnswer.Get(host)) {
-        RetryErase(host);
-        return;
-    }
 
     EraseConfirmed.Set(host);
     MaybeAdvanceToErased();
@@ -301,7 +277,38 @@ void TInflightInfo::EraseFailed(THostIndex host)
 
 THostMask TInflightInfo::GetEraseNeeded() const
 {
-    return WriteRequested.Exclude(EraseRequested).Exclude(EraseConfirmed);
+    return WriteConfirmed.Exclude(Disabled)
+        .Exclude(EraseRequested)
+        .Exclude(EraseConfirmed);
+}
+
+bool TInflightInfo::IsPreFlush() const
+{
+    switch (State) {
+        case EState::PBufferPendingWrite:
+        case EState::PBufferIncompleteWrite:
+        case EState::PBufferWritten:
+        case EState::PBufferFlushing:
+            return true;
+        case EState::PBufferFlushed:
+        case EState::PBufferDiscarded:
+        case EState::PBufferErased:
+            return false;
+    }
+}
+
+bool TInflightInfo::IsWaitingForBarrier() const
+{
+    return CanErase() && !CanForget() && PBuffersLockCount == 0 &&
+           GetEraseNeeded().Empty() &&
+           EraseRequested.Exclude(EraseConfirmed).Empty();
+}
+
+void TInflightInfo::ForgetByBarrier()
+{
+    Y_ABORT_UNLESS(IsWaitingForBarrier());
+
+    SetState(EState::PBufferErased);
 }
 
 void TInflightInfo::UpdateHosts(
@@ -348,7 +355,7 @@ void TInflightInfo::UpdateHosts(
         case EState::PBufferDiscarded: {
             // Nothing more will be flushed, so DesiredDDisks stays as it is.
             Disabled = disabled;
-            // The record does not wait for a disabled host: it may be done.
+            // A disabled host is left to the barrier: the record may be done.
             MaybeAdvanceToErased();
             break;
         }
@@ -416,12 +423,10 @@ TString TInflightInfo::DebugPrint(TInstant now) const
            << ", dd:" << DesiredDDisks.Print() << ", d:" << Disabled.Print()
            << ", wr:" << WriteRequested.Print()
            << ", wc:" << WriteConfirmed.Print()
-           << ", wa:" << WriteAnswered.Print()
            << ", fr:" << FlushRequested.Print()
            << ", fc:" << FlushConfirmed.Print()
            << ", er:" << EraseRequested.Print()
-           << ", ec:" << EraseConfirmed.Print()
-           << ", eb:" << EraseSentBeforeAnswer.Print();
+           << ", ec:" << EraseConfirmed.Print();
 
     return result;
 }
@@ -501,15 +506,12 @@ void TInflightInfo::SetState(EState newState)
 void TInflightInfo::CheckInvariants() const
 {
     Y_ABORT_UNLESS(WriteConfirmed.Exclude(WriteRequested).Empty());
-    Y_ABORT_UNLESS(WriteAnswered.Exclude(WriteRequested).Empty());
     Y_ABORT_UNLESS(
         FlushConfirmed.Exclude(Disabled).Exclude(FlushRequested).Empty());
     Y_ABORT_UNLESS(
         FlushRequested.Exclude(Disabled).Exclude(DesiredDDisks).Empty());
     Y_ABORT_UNLESS(EraseConfirmed.Exclude(EraseRequested).Empty());
-    Y_ABORT_UNLESS(EraseRequested.Exclude(WriteRequested).Empty());
-    Y_ABORT_UNLESS(EraseSentBeforeAnswer.Exclude(EraseRequested).Empty());
-    Y_ABORT_UNLESS(EraseSentBeforeAnswer.LogicalAnd(EraseConfirmed).Empty());
+    Y_ABORT_UNLESS(EraseRequested.Exclude(WriteConfirmed).Empty());
 
     switch (State) {
         case EState::PBufferPendingWrite:
@@ -554,7 +556,8 @@ void TInflightInfo::CheckInvariants() const
         case EState::PBufferErased:
             // Never flushed, so the flush quorum lives in PBufferFlushed.
             Y_ABORT_UNLESS(GetInflightFlushes().Empty());
-            Y_ABORT_UNLESS(CanForget());
+            Y_ABORT_UNLESS(GetEraseNeeded().Empty());
+            Y_ABORT_UNLESS(EraseRequested.Exclude(EraseConfirmed).Empty());
             Y_ABORT_UNLESS(PBuffersLockCount == 0);
             break;
     }
@@ -590,9 +593,7 @@ void TInflightInfo::MaybeQueryErase()
         return;
     }
 
-    const auto hostsToErase =
-        WriteRequested.Exclude(Disabled).Exclude(EraseRequested);
-    if (!hostsToErase.Empty()) {
+    if (!GetEraseNeeded().Empty()) {
         ReadyQueue->Register(*this, IReadyQueue::EQueueType::Erase);
     }
 }
@@ -605,17 +606,13 @@ bool TInflightInfo::CanErase() const
 
 void TInflightInfo::RetryErase(THostIndex host)
 {
-    EraseSentBeforeAnswer.Reset(host);
     EraseRequested.Reset(host);
     MaybeQueryErase();
 }
 
 bool TInflightInfo::CanForget() const
 {
-    const auto answered = WriteAnswered.Include(Disabled);
-
-    return WriteRequested.Exclude(answered).Empty() &&
-           WriteRequested.Exclude(Disabled).Exclude(EraseConfirmed).Empty();
+    return WriteRequested.Exclude(EraseConfirmed).Empty();
 }
 
 TPBufferKey TInflightInfo::GetPBufferKey() const

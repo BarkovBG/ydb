@@ -129,18 +129,18 @@ public:
         // Read from DDisk.
         PBufferDiscarded,
 
-        // No copy is left on any PBuffer and every host has answered, so the
-        // record can leave the map. Reached from PBufferFlushed and from
-        // PBufferDiscarded.
+        // Every confirmed copy is erased, or the record was forgotten by the
+        // vchunk barrier. Reached from PBufferFlushed and PBufferDiscarded.
         // Read from DDisk.
         PBufferErased,
     };
 
     // The state says what happened to the data. What happened to the copies
-    // is kept in the masks: EraseRequested, EraseConfirmed,
-    // EraseSentBeforeAnswer. Erasing is allowed in PBufferFlushed (the data is
-    // on DDisk already) and in PBufferDiscarded (the write was answered with an
-    // error, so erasing a copy cannot lose anything), and nowhere else.
+    // is kept in the masks: EraseRequested, EraseConfirmed. Erasing is
+    // allowed in PBufferFlushed (the data is on DDisk already) and in
+    // PBufferDiscarded (the write was answered with an error, so erasing a
+    // copy cannot lose anything), and nowhere else. Only a confirmed copy is
+    // erased by address; a host that never confirmed is left to the barrier.
 
     TInflightInfo(
         IReadyQueue* readyQueue,
@@ -158,27 +158,19 @@ public:
     void RestorePBuffer(THostIndex host);
 
     // Transitions a pending write to the written state once a quorum of
-    // PBuffers confirmed it. Answered are the hosts with no write request
-    // in flight: a confirmed host is not answered while another write to it
-    // can still land.
-    void OnWritten(
-        THostMask writeRequested,
-        THostMask writeConfirmed,
-        THostMask writeAnswered);
+    // PBuffers confirmed it.
+    void OnWritten(THostMask writeRequested, THostMask writeConfirmed);
 
     // Transitions a pending write to PBufferDiscarded: the quorum was not
     // reached and the client got an error, but the copies that did land
     // still have to be erased.
     void OnWriteWithoutQuorum(
         THostMask writeRequested,
-        THostMask writeConfirmed,
-        THostMask writeAnswered);
+        THostMask writeConfirmed);
 
-    // Answers that came after the client had been replied to, successful and
-    // failed. Only an erase sent after such an answer proves that the host
-    // holds no copy: a confirmed erase is repeated, an erase in flight is
-    // marked and repeated once it answers.
-    void OnBelatedWrite(THostMask completed, THostMask failed);
+    // Successful answers that came after the client had been replied to: the
+    // copies are confirmed now and get erased by address.
+    void OnBelatedWrite(THostMask completed);
 
     [[nodiscard]] EState GetState() const;
 
@@ -200,9 +192,15 @@ public:
     void RequestErase(THostIndex host);
     void ConfirmErase(THostIndex host);
     void EraseFailed(THostIndex host);
-    // Hosts where a write was requested but erase is not yet
-    // requested/confirmed.
+    // Confirmed hosts whose copy is not yet requested or confirmed for erase.
     [[nodiscard]] THostMask GetEraseNeeded() const;
+    // True while the data lives only in PBuffers.
+    [[nodiscard]] bool IsPreFlush() const;
+    // True when nothing is left to erase by address, yet a requested host
+    // never confirmed or is disabled: only the vchunk barrier can end it.
+    [[nodiscard]] bool IsWaitingForBarrier() const;
+    // Ends a record waiting for the barrier once the barrier is persisted.
+    void ForgetByBarrier();
 
     // Update state according to the changed configuration.
     void UpdateHosts(THostMask added, THostMask removed, THostMask disabled);
@@ -244,8 +242,8 @@ private:
     [[nodiscard]] bool CanErase() const;
     // Drops an erase attempt that proved nothing and asks for a new one.
     void RetryErase(THostIndex host);
-    // True when every host that was asked to write has answered and every
-    // copy has been erased, so the record can leave the map.
+    // True when every host that was asked to write has confirmed the erase,
+    // so the record can leave the map without the barrier.
     [[nodiscard]] bool CanForget() const;
 
     [[nodiscard]] TPBufferKey GetPBufferKey() const;
@@ -268,17 +266,10 @@ private:
     THostMask Disabled;
     THostMask WriteRequested;
     THostMask WriteConfirmed;
-    // Hosts with no write request in flight, whatever they answered. Only
-    // such a host counts as answered for CanForget.
-    THostMask WriteAnswered;
     THostMask FlushRequested;
     THostMask FlushConfirmed;
     THostMask EraseRequested;
     THostMask EraseConfirmed;
-    // Hosts whose erase in flight was sent before the host answered the
-    // write. Such an erase may have run before the copy landed, so its
-    // answer is not counted and the erase is repeated.
-    THostMask EraseSentBeforeAnswer;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
