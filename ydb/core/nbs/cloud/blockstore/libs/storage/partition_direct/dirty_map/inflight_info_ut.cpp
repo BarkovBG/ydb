@@ -610,19 +610,26 @@ Y_UNIT_TEST_SUITE(TInflightInfoTests)
         // The write was answered with an error, so reads go to DDisk.
         UNIT_ASSERT_VALUES_EQUAL(true, inflightInfo.ReadMask().OnlyDDisk());
 
-        // Only the confirmed copy is erased by address.
-        UNIT_ASSERT_VALUES_EQUAL("[H0]", inflightInfo.GetEraseNeeded().Print());
+        // Every requested host is erased once: an error does not prove that
+        // nothing landed.
+        UNIT_ASSERT_VALUES_EQUAL(
+            "[H0,H1,H2]",
+            inflightInfo.GetEraseNeeded().Print());
         UNIT_ASSERT_VALUES_EQUAL(false, inflightInfo.IsWaitingForBarrier());
 
-        // Erasing the copy does not change the state either.
-        inflightInfo.RequestErase(THostIndex{0});
-        inflightInfo.ConfirmErase(THostIndex{0});
+        // Erasing the copies does not change the state either.
+        for (const auto host: MakePrimaryHosts()) {
+            inflightInfo.RequestErase(host);
+        }
+        for (const auto host: MakePrimaryHosts()) {
+            inflightInfo.ConfirmErase(host);
+        }
         UNIT_ASSERT_VALUES_EQUAL(
             TInflightInfo::EState::PBufferDiscarded,
             inflightInfo.GetState());
 
-        // H1 and H2 never confirmed: a copy may still land there, so the
-        // record waits for the vchunk barrier instead of an answer.
+        // H1 and H2 never confirmed the write: their erase answers prove
+        // nothing, so the record waits for the vchunk barrier.
         UNIT_ASSERT_VALUES_EQUAL(true, inflightInfo.IsWaitingForBarrier());
         UNIT_ASSERT_VALUES_EQUAL("[]", inflightInfo.GetEraseNeeded().Print());
 
@@ -644,20 +651,20 @@ Y_UNIT_TEST_SUITE(TInflightInfoTests)
         inflightInfo.OnWritten(THostMask::MakeAll(4), MakePrimaryHosts());
         FlushAll(inflightInfo);
 
-        // Only confirmed copies are erased by address.
+        // Every requested host is erased once, H3 included.
         UNIT_ASSERT_VALUES_EQUAL(
-            "[H0,H1,H2]",
+            "[H0,H1,H2,H3]",
             inflightInfo.GetEraseNeeded().Print());
         UNIT_ASSERT_VALUES_EQUAL(false, inflightInfo.IsWaitingForBarrier());
-        for (const auto host: MakePrimaryHosts()) {
+        for (const auto host: THostMask::MakeAll(4)) {
             inflightInfo.RequestErase(host);
         }
-        for (const auto host: MakePrimaryHosts()) {
+        for (const auto host: THostMask::MakeAll(4)) {
             inflightInfo.ConfirmErase(host);
         }
 
-        // H3 may still hold a copy: the record stays and waits for the
-        // barrier.
+        // H3 never confirmed the write: its erase may have run before the
+        // copy landed, so the record stays and waits for the barrier.
         UNIT_ASSERT_VALUES_EQUAL(
             TInflightInfo::EState::PBufferFlushed,
             inflightInfo.GetState());
@@ -670,7 +677,7 @@ Y_UNIT_TEST_SUITE(TInflightInfoTests)
             inflightInfo.GetState());
     }
 
-    Y_UNIT_TEST(ShouldEraseBelatedCopyWhileWaitingForBarrier)
+    Y_UNIT_TEST(ShouldNotEraseAgainAfterBelatedAnswer)
     {
         TTestReadyQueue readyQueue;
         TInflightInfo inflightInfo(
@@ -680,23 +687,53 @@ Y_UNIT_TEST_SUITE(TInflightInfoTests)
 
         inflightInfo.OnWritten(THostMask::MakeAll(4), MakePrimaryHosts());
         FlushAll(inflightInfo);
-        for (const auto host: MakePrimaryHosts()) {
+        for (const auto host: THostMask::MakeAll(4)) {
             inflightInfo.RequestErase(host);
         }
-        for (const auto host: MakePrimaryHosts()) {
+        for (const auto host: THostMask::MakeAll(4)) {
             inflightInfo.ConfirmErase(host);
         }
         UNIT_ASSERT_VALUES_EQUAL(true, inflightInfo.IsWaitingForBarrier());
 
-        // H3 answers late: its copy is real and is erased by address.
+        // H3 answers after its erase: the copy may have landed after the
+        // erase, and the answer does not make H3 confirmed. Nothing is erased
+        // again, the barrier covers what the erase missed.
         inflightInfo.OnBelatedWrite(THostMask::MakeOne(THostIndex{3}));
-        UNIT_ASSERT_VALUES_EQUAL(false, inflightInfo.IsWaitingForBarrier());
-        UNIT_ASSERT_VALUES_EQUAL("[H3]", inflightInfo.GetEraseNeeded().Print());
+        UNIT_ASSERT_VALUES_EQUAL("[]", inflightInfo.GetEraseNeeded().Print());
+        UNIT_ASSERT_VALUES_EQUAL(true, inflightInfo.IsWaitingForBarrier());
+        UNIT_ASSERT_VALUES_EQUAL(
+            TInflightInfo::EState::PBufferFlushed,
+            inflightInfo.GetState());
 
-        inflightInfo.RequestErase(THostIndex{3});
-        inflightInfo.ConfirmErase(THostIndex{3});
+        inflightInfo.ForgetByBarrier();
+        UNIT_ASSERT_VALUES_EQUAL(
+            TInflightInfo::EState::PBufferErased,
+            inflightInfo.GetState());
+    }
 
-        // Every requested host confirmed the erase: no barrier needed.
+    Y_UNIT_TEST(ShouldCountBelatedAnswerBeforeErase)
+    {
+        TTestReadyQueue readyQueue;
+        TInflightInfo inflightInfo(
+            &readyQueue,
+            MakeDDisks(),
+            THostMask::MakeEmpty());
+
+        inflightInfo.OnWritten(THostMask::MakeAll(4), MakePrimaryHosts());
+        FlushAll(inflightInfo);
+
+        // H3 answers before any erase was sent to it: the erase that follows
+        // runs after the copy landed, so H3 counts as confirmed.
+        inflightInfo.OnBelatedWrite(THostMask::MakeOne(THostIndex{3}));
+        for (const auto host: THostMask::MakeAll(4)) {
+            inflightInfo.RequestErase(host);
+        }
+        for (const auto host: THostMask::MakeAll(4)) {
+            inflightInfo.ConfirmErase(host);
+        }
+
+        // Every requested host confirmed both the write and the erase: no
+        // barrier needed.
         UNIT_ASSERT_VALUES_EQUAL(
             TInflightInfo::EState::PBufferErased,
             inflightInfo.GetState());

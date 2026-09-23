@@ -139,8 +139,9 @@ public:
     // is kept in the masks: EraseRequested, EraseConfirmed. Erasing is
     // allowed in PBufferFlushed (the data is on DDisk already) and in
     // PBufferDiscarded (the write was answered with an error, so erasing a
-    // copy cannot lose anything), and nowhere else. Only a confirmed copy is
-    // erased by address; a host that never confirmed is left to the barrier.
+    // copy cannot lose anything), and nowhere else. Every requested host is
+    // erased once; the erase answer of a host that never confirmed the write
+    // proves nothing, so such a host is left to the vchunk barrier.
 
     TInflightInfo(
         IReadyQueue* readyQueue,
@@ -168,8 +169,9 @@ public:
         THostMask writeRequested,
         THostMask writeConfirmed);
 
-    // Successful answers that came after the client had been replied to: the
-    // copies are confirmed now and get erased by address.
+    // Successful answers that came after the client had been replied to. A
+    // host erased before its answer stays unconfirmed and is not erased
+    // again: what that erase missed is left to the vchunk barrier.
     void OnBelatedWrite(THostMask completed);
 
     [[nodiscard]] EState GetState() const;
@@ -192,12 +194,12 @@ public:
     void RequestErase(THostIndex host);
     void ConfirmErase(THostIndex host);
     void EraseFailed(THostIndex host);
-    // Confirmed hosts whose copy is not yet requested or confirmed for erase.
+    // Requested hosts not yet requested or confirmed for erase.
     [[nodiscard]] THostMask GetEraseNeeded() const;
     // True while the data lives only in PBuffers.
     [[nodiscard]] bool IsPreFlush() const;
-    // True when nothing is left to erase by address, yet a requested host
-    // never confirmed or is disabled: only the vchunk barrier can end it.
+    // True when nothing is left to erase, yet a requested host never
+    // confirmed the write or is disabled: only the vchunk barrier can end it.
     [[nodiscard]] bool IsWaitingForBarrier() const;
     // Ends a record waiting for the barrier once the barrier is persisted.
     void ForgetByBarrier();
@@ -242,8 +244,9 @@ private:
     [[nodiscard]] bool CanErase() const;
     // Drops an erase attempt that proved nothing and asks for a new one.
     void RetryErase(THostIndex host);
-    // True when every host that was asked to write has confirmed the erase,
-    // so the record can leave the map without the barrier.
+    // True when every host that was asked to write has confirmed both the
+    // write and the erase, so the record can leave the map without the
+    // barrier.
     [[nodiscard]] bool CanForget() const;
 
     [[nodiscard]] TPBufferKey GetPBufferKey() const;

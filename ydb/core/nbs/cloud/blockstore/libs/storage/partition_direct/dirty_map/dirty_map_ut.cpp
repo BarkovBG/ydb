@@ -728,11 +728,13 @@ Y_UNIT_TEST_SUITE(TDirtyMapTest)
             dirtyMap->GetSafeBarrierForErase()->Print());
         UNIT_ASSERT_VALUES_EQUAL(1, dirtyMap->GetInflightCount());
 
-        // The confirmed copies are erased by address; H2 never confirmed.
+        // Every requested host is erased once; H2 never confirmed, so its
+        // erase answer proves nothing.
         auto eraseHints = dirtyMap->MakeEraseHint(1);
         UNIT_ASSERT_VALUES_EQUAL(
             "H0:1:123;"
-            "H1:1:123;",
+            "H1:1:123;"
+            "H2:1:123;",
             eraseHints.DebugPrint());
         EraseAll(eraseHints, *dirtyMap);
 
@@ -1233,16 +1235,19 @@ Y_UNIT_TEST_SUITE(TDirtyMapTest)
             MakePrimaryHosts());
         FlushAll(dirtyMap->MakeFlushHint(1), *dirtyMap);
 
-        // The confirmed copy of the write without quorum is erased first, the
-        // newer record waits for it.
+        // The write without quorum is erased first on every requested host,
+        // the newer record waits for it.
         auto eraseHints = dirtyMap->MakeEraseHint(1);
-        UNIT_ASSERT_VALUES_EQUAL("H0:1:5;", eraseHints.DebugPrint());
-
-        dirtyMap->EraseFinished(THostIndex{0}, {MakeKey(5)}, {});
+        UNIT_ASSERT_VALUES_EQUAL(
+            "H0:1:5;"
+            "H1:1:5;"
+            "H2:1:5;",
+            eraseHints.DebugPrint());
+        EraseAll(eraseHints, *dirtyMap);
         UNIT_ASSERT_VALUES_EQUAL(2, dirtyMap->GetInflightCount());
 
-        // H1 and H2 never confirmed: the record waits for the vchunk barrier.
-        // The newer record is flushed, so it does not cap the barrier.
+        // H1 and H2 never confirmed the write: the record waits for the
+        // vchunk barrier. The newer record is flushed, so it does not cap it.
         UNIT_ASSERT_VALUES_EQUAL(
             MakeKey(5).Print(),
             dirtyMap->GetBarrierTarget().Print());
@@ -1257,7 +1262,7 @@ Y_UNIT_TEST_SUITE(TDirtyMapTest)
             eraseHints.DebugPrint());
     }
 
-    Y_UNIT_TEST(ShouldEraseBelatedCopyBeforeForgettingRecord)
+    Y_UNIT_TEST(ShouldNotEraseAgainAfterBelatedAnswer)
     {
         const auto vchunkConfig = MakeTestVChunkConfig();
         auto dirtyMap = MakeDirtyMap(vchunkConfig);
@@ -1273,37 +1278,37 @@ Y_UNIT_TEST_SUITE(TDirtyMapTest)
             MakePrimaryHosts());
         FlushAll(dirtyMap->MakeFlushHint(1), *dirtyMap);
 
-        // Only the confirmed copies are erased by address.
+        // Every requested host is erased once, H3 included.
         auto eraseHints = dirtyMap->MakeEraseHint(1);
         UNIT_ASSERT_VALUES_EQUAL(
             "H0:1:5;"
             "H1:1:5;"
-            "H2:1:5;",
+            "H2:1:5;"
+            "H3:1:5;",
             eraseHints.DebugPrint());
 
         EraseAll(eraseHints, *dirtyMap);
 
-        // H3 has not answered the write, so the record is kept: its copy may
-        // still land. The barrier target is set for it.
+        // H3 has not answered the write: its erase may have run before the
+        // copy landed, so the record is kept and the barrier target is set.
         UNIT_ASSERT_VALUES_EQUAL(1, dirtyMap->GetInflightCount());
         UNIT_ASSERT_VALUES_EQUAL(
             MakeKey(5).Print(),
             dirtyMap->GetBarrierTarget().Print());
 
+        // H3 answers after its erase: nothing is erased again, the record
+        // still waits for the barrier.
         dirtyMap->OnBelatedWrite(
             MakeKey(5),
             THostMask::MakeMask({THostIndex{3}}));
+        UNIT_ASSERT_VALUES_EQUAL(false, dirtyMap->NeedErase());
+        UNIT_ASSERT_VALUES_EQUAL(1, dirtyMap->GetInflightCount());
 
-        // The copy that landed late is real: it is erased by address, and the
-        // record leaves without waiting for the persist.
-        eraseHints = dirtyMap->MakeEraseHint(1);
-        UNIT_ASSERT_VALUES_EQUAL("H3:1:5;", eraseHints.DebugPrint());
-
-        dirtyMap->EraseFinished(THostIndex{3}, {MakeKey(5)}, {});
+        dirtyMap->StatePersisted(dirtyMap->GetCurrentGeneration());
         UNIT_ASSERT_VALUES_EQUAL(0, dirtyMap->GetInflightCount());
     }
 
-    Y_UNIT_TEST(ShouldEraseBelatedCopyAndLeaveSilentHostToBarrier)
+    Y_UNIT_TEST(ShouldCountBelatedAnswerBeforeErase)
     {
         const auto vchunkConfig = MakeTestVChunkConfig();
         auto dirtyMap = MakeDirtyMap(vchunkConfig);
@@ -1319,24 +1324,24 @@ Y_UNIT_TEST_SUITE(TDirtyMapTest)
             MakePrimaryHosts(),
             MakeHostMask(true, false, false, false, false));
 
-        auto eraseHints = dirtyMap->MakeEraseHint(1);
-        UNIT_ASSERT_VALUES_EQUAL("H0:1:5;", eraseHints.DebugPrint());
-        EraseAll(eraseHints, *dirtyMap);
-
-        // H1 and H2 have not answered the write: the record is kept.
-        UNIT_ASSERT_VALUES_EQUAL(1, dirtyMap->GetInflightCount());
-        UNIT_ASSERT_VALUES_EQUAL(false, dirtyMap->NeedErase());
-
-        // H1 answers OK: the copy is real and is erased by address.
+        // H1 answers OK before any erase was sent: it counts as confirmed.
         dirtyMap->OnBelatedWrite(
             MakeKey(5),
             THostMask::MakeMask({THostIndex{1}}));
-        eraseHints = dirtyMap->MakeEraseHint(1);
-        UNIT_ASSERT_VALUES_EQUAL("H1:1:5;", eraseHints.DebugPrint());
-        dirtyMap->EraseFinished(THostIndex{1}, {MakeKey(5)}, {});
 
-        // H2 is still silent: only the vchunk barrier ends the record.
+        // Every requested host is erased once.
+        auto eraseHints = dirtyMap->MakeEraseHint(1);
+        UNIT_ASSERT_VALUES_EQUAL(
+            "H0:1:5;"
+            "H1:1:5;"
+            "H2:1:5;",
+            eraseHints.DebugPrint());
+        EraseAll(eraseHints, *dirtyMap);
+
+        // H2 never confirmed the write: only the vchunk barrier ends the
+        // record.
         UNIT_ASSERT_VALUES_EQUAL(1, dirtyMap->GetInflightCount());
+        UNIT_ASSERT_VALUES_EQUAL(false, dirtyMap->NeedErase());
         UNIT_ASSERT_VALUES_EQUAL(
             MakeKey(5).Print(),
             dirtyMap->GetBarrierTarget().Print());

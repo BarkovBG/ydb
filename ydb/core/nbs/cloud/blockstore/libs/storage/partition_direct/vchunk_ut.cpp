@@ -233,11 +233,22 @@ Y_UNIT_TEST_SUITE(TVChunkTest)
             GetSafeBarrierOnExecutor(DirectBlockGroup->GetExecutor(), *vchunk)
                 ->Print());
 
-        // No host confirmed a copy, so nothing is erased by address: the
-        // desired hosts answered with an error and the two handoffs, written
-        // by the hedge, are still in flight. The record waits for the vchunk
-        // barrier, which is persisted with the dirty map state.
+        // Erase goes once to every host that was asked to write: the three
+        // desired ones and the two handoffs the hedge wrote to, whose writes
+        // are still in flight.
+        UNIT_ASSERT_VALUES_EQUAL(
+            true,
+            WaitScheduledTasks(1, TDuration::Seconds(10)));
+        RunScheduledTasks();
+        UNIT_ASSERT_VALUES_EQUAL(
+            true,
+            WaitEraseRequests(5, TDuration::Seconds(10)));
+        SetEraseResult(TDBGEraseResponse{.Error = MakeError(S_OK)}, true);
         DrainExecutor(DirectBlockGroup->GetExecutor());
+
+        // No host confirmed the write, so the erase answers prove nothing:
+        // the record waits for the vchunk barrier, which is persisted with
+        // the dirty map state.
         UNIT_ASSERT_VALUES_EQUAL(
             1,
             PartitionDirectService->UpdateDirtyMapStateRequests.size());

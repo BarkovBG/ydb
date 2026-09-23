@@ -125,8 +125,9 @@ void TInflightInfo::OnBelatedWrite(THostMask completed)
     Y_ABORT_UNLESS(completed.Exclude(WriteRequested).Empty());
     Y_ABORT_UNLESS(State != EState::PBufferErased);
 
-    WriteConfirmed = WriteConfirmed.Include(completed);
+    WriteConfirmed = WriteConfirmed.Include(completed.Exclude(EraseRequested));
 
+    MaybeAdvanceToErased();
     MaybeQueryErase();
 }
 
@@ -241,7 +242,7 @@ THostMask TInflightInfo::GetInflightFlushes() const
 void TInflightInfo::RequestErase(THostIndex host)
 {
     Y_ABORT_UNLESS(CanErase());
-    Y_ABORT_UNLESS(WriteConfirmed.Get(host));
+    Y_ABORT_UNLESS(WriteRequested.Get(host));
     Y_ABORT_UNLESS(!EraseRequested.Get(host));
     Y_ABORT_UNLESS(!EraseConfirmed.Get(host));
     Y_ABORT_UNLESS(PBuffersLockCount == 0);
@@ -277,7 +278,7 @@ void TInflightInfo::EraseFailed(THostIndex host)
 
 THostMask TInflightInfo::GetEraseNeeded() const
 {
-    return WriteConfirmed.Exclude(Disabled)
+    return WriteRequested.Exclude(Disabled)
         .Exclude(EraseRequested)
         .Exclude(EraseConfirmed);
 }
@@ -511,7 +512,7 @@ void TInflightInfo::CheckInvariants() const
     Y_ABORT_UNLESS(
         FlushRequested.Exclude(Disabled).Exclude(DesiredDDisks).Empty());
     Y_ABORT_UNLESS(EraseConfirmed.Exclude(EraseRequested).Empty());
-    Y_ABORT_UNLESS(EraseRequested.Exclude(WriteConfirmed).Empty());
+    Y_ABORT_UNLESS(EraseRequested.Exclude(WriteRequested).Empty());
 
     switch (State) {
         case EState::PBufferPendingWrite:
@@ -612,7 +613,8 @@ void TInflightInfo::RetryErase(THostIndex host)
 
 bool TInflightInfo::CanForget() const
 {
-    return WriteRequested.Exclude(EraseConfirmed).Empty();
+    return WriteRequested.Exclude(WriteConfirmed).Empty() &&
+           WriteRequested.Exclude(EraseConfirmed).Empty();
 }
 
 TPBufferKey TInflightInfo::GetPBufferKey() const
