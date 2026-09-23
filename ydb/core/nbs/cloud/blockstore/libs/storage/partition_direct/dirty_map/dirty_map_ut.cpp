@@ -1085,7 +1085,13 @@ Y_UNIT_TEST_SUITE(TDirtyMapTest)
             "H2:1:123;",
             eraseHints.DebugPrint());
         EraseAll(eraseHints, *dirtyMap);
-        // Should remove inflight items
+        // The copy on the disabled host 0 is left to the vchunk barrier: the
+        // record stays until the barrier is persisted.
+        UNIT_ASSERT_VALUES_EQUAL(1, dirtyMap->GetInflightCount());
+        UNIT_ASSERT_VALUES_EQUAL(
+            MakeKey(123).Print(),
+            dirtyMap->GetBarrierTarget().Print());
+        dirtyMap->StatePersisted(dirtyMap->GetCurrentGeneration());
         UNIT_ASSERT_VALUES_EQUAL(0, dirtyMap->GetInflightCount());
     }
 
@@ -2476,7 +2482,12 @@ Y_UNIT_TEST_SUITE(TDirtyMapTest)
         // Erase should only cover hosts that still have write data (0 and 2).
         UNIT_ASSERT_VALUES_EQUAL("H0:1:123;H2:1:123;", eraseHints.DebugPrint());
         EraseAll(eraseHints, *dirtyMap);
-        // Inflight should be fully cleaned up.
+        // The copy on the evacuated host 1 is left to the vchunk barrier.
+        UNIT_ASSERT_VALUES_EQUAL(1, dirtyMap->GetInflightCount());
+        UNIT_ASSERT_VALUES_EQUAL(
+            MakeKey(123).Print(),
+            dirtyMap->GetBarrierTarget().Print());
+        dirtyMap->StatePersisted(dirtyMap->GetCurrentGeneration());
         UNIT_ASSERT_VALUES_EQUAL(0, dirtyMap->GetInflightCount());
     }
 
@@ -2519,11 +2530,20 @@ Y_UNIT_TEST_SUITE(TDirtyMapTest)
         // Inflight item still present — host 1 erase pending.
         UNIT_ASSERT_VALUES_EQUAL(1, dirtyMap->GetInflightCount());
 
-        // Evacuate host 1
+        // Evacuate host 1: its erase in flight may never answer, so it does
+        // not hold the record. The copy is left to the vchunk barrier.
         vchunkConfig.EvacuateHost(1);
         dirtyMap->UpdateConfig(vchunkConfig, true);
+        UNIT_ASSERT_VALUES_EQUAL(1, dirtyMap->GetInflightCount());
+        UNIT_ASSERT_VALUES_EQUAL(
+            MakeKey(123).Print(),
+            dirtyMap->GetBarrierTarget().Print());
 
-        // The inflight item should be fully erased and removed from the map.
+        dirtyMap->StatePersisted(dirtyMap->GetCurrentGeneration());
+        UNIT_ASSERT_VALUES_EQUAL(0, dirtyMap->GetInflightCount());
+
+        // The late erase answer from the evacuated host is ignored.
+        dirtyMap->EraseFinished(THostIndex{1}, {MakeKey(123)}, {});
         UNIT_ASSERT_VALUES_EQUAL(0, dirtyMap->GetInflightCount());
     }
 

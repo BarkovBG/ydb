@@ -300,9 +300,11 @@ bool TInflightInfo::IsPreFlush() const
 
 bool TInflightInfo::IsWaitingForBarrier() const
 {
+    // An erase in flight to a disabled host may never answer: it does not
+    // hold the record, the barrier covers that host anyway.
     return CanErase() && !CanForget() && PBuffersLockCount == 0 &&
            GetEraseNeeded().Empty() &&
-           EraseRequested.Exclude(EraseConfirmed).Empty();
+           EraseRequested.Exclude(EraseConfirmed).Exclude(Disabled).Empty();
 }
 
 void TInflightInfo::ForgetByBarrier()
@@ -558,7 +560,9 @@ void TInflightInfo::CheckInvariants() const
             // Never flushed, so the flush quorum lives in PBufferFlushed.
             Y_ABORT_UNLESS(GetInflightFlushes().Empty());
             Y_ABORT_UNLESS(GetEraseNeeded().Empty());
-            Y_ABORT_UNLESS(EraseRequested.Exclude(EraseConfirmed).Empty());
+            Y_ABORT_UNLESS(EraseRequested.Exclude(EraseConfirmed)
+                               .Exclude(Disabled)
+                               .Empty());
             Y_ABORT_UNLESS(PBuffersLockCount == 0);
             break;
     }

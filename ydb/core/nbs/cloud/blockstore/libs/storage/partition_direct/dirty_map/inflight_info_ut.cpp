@@ -1105,13 +1105,20 @@ Y_UNIT_TEST_SUITE(TInflightInfoTests)
             true,
             readyQueue.ReadyToErase.contains(MakeKey(123)));
 
-        // Erase all still-written hosts (host 3 excluded via Disabled).
+        // Erase all still-written hosts (host 3 excluded via Disabled). The
+        // copy on host 3 is left to the vchunk barrier.
         inflightInfo.RequestErase(THostIndex{0});
         inflightInfo.RequestErase(THostIndex{1});
         inflightInfo.RequestErase(THostIndex{2});
         inflightInfo.ConfirmErase(THostIndex{0});
         inflightInfo.ConfirmErase(THostIndex{1});
         inflightInfo.ConfirmErase(THostIndex{2});
+        UNIT_ASSERT_VALUES_EQUAL(
+            TInflightInfo::EState::PBufferFlushed,
+            inflightInfo.GetState());
+        UNIT_ASSERT_VALUES_EQUAL(true, inflightInfo.IsWaitingForBarrier());
+
+        inflightInfo.ForgetByBarrier();
         UNIT_ASSERT_VALUES_EQUAL(
             TInflightInfo::EState::PBufferErased,
             inflightInfo.GetState());
@@ -1466,13 +1473,20 @@ Y_UNIT_TEST_SUITE(TInflightInfoTests)
             "[H0,H1,H2]",
             readyQueue.GetFlushCompletedMask(MakeKey(123)));
 
-        // Erase all still-written hosts (host 3 excluded via Disabled).
+        // Erase all still-written hosts (host 3 excluded via Disabled). The
+        // copy on host 3 is left to the vchunk barrier.
         inflightInfo.RequestErase(THostIndex{0});
         inflightInfo.RequestErase(THostIndex{1});
         inflightInfo.RequestErase(THostIndex{2});
         inflightInfo.ConfirmErase(THostIndex{0});
         inflightInfo.ConfirmErase(THostIndex{1});
         inflightInfo.ConfirmErase(THostIndex{2});
+        UNIT_ASSERT_VALUES_EQUAL(
+            TInflightInfo::EState::PBufferFlushed,
+            inflightInfo.GetState());
+        UNIT_ASSERT_VALUES_EQUAL(true, inflightInfo.IsWaitingForBarrier());
+
+        inflightInfo.ForgetByBarrier();
         UNIT_ASSERT_VALUES_EQUAL(
             TInflightInfo::EState::PBufferErased,
             inflightInfo.GetState());
