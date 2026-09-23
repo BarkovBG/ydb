@@ -20,7 +20,8 @@ struct TWriteRequestResponse
     TPBufferKey PBufferKey;
     // The PBuffer hosts where the attempt was made to write the data.
     THostMask RequestedWrites;
-    // The PBuffer hosts where exactly the data was written and confirmed.
+    // The PBuffer hosts that confirmed the data and have no other write in
+    // flight. A host outside this mask may still get a copy.
     THostMask CompletedWrites;
 };
 

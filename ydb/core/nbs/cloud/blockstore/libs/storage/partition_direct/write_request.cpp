@@ -421,10 +421,12 @@ void TWriteRequestExecutor::Reply(NProto::TError error)
         Y_ABORT_UNLESS(IsQuorumReached());
     }
 
+    // A host with another write still in flight is not confirmed yet: it is
+    // reported once every write to it has answered.
     Bundle->Reply(
         std::move(error),
         RequestedDirectWrites.Include(RequestedIndirectWrites),
-        CompletedWrites);
+        CompletedWrites.LogicalAnd(GetFullyAnsweredHosts()));
 }
 
 void TWriteRequestExecutor::NotifyBelated(THostMask fullyAnsweredHosts)
