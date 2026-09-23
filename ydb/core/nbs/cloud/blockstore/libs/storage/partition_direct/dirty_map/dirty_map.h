@@ -65,17 +65,12 @@ public:
         TPBufferKey pBufferKey,
         TBlockRange16 range,
         THostMask requested,
-        THostMask confirmed,
-        // Hosts with no write request in flight, whatever they answered.
-        THostMask answered);
+        THostMask confirmed);
 
-    // Answers that came after the client had been replied to. A record that
-    // has already left the map is ignored: its copy is left to the cleanup
-    // barrier.
-    void OnBelatedWrite(
-        TPBufferKey pBufferKey,
-        THostMask completed,
-        THostMask failed);
+    // Successful answers that came after the client had been replied to. A
+    // record that has already left the map is ignored: its copy is below the
+    // vchunk barrier.
+    void OnBelatedWrite(TPBufferKey pBufferKey, THostMask completed);
     void FlushFinished(
         THostRoute route,
         const TVector<TPBufferKey>& flushOk,
@@ -146,8 +141,13 @@ public:
 
     // Persist
     [[nodiscard]] bool NeedPersist() const;
-    // Returns an empty proto when no DDisk needs repair.
+    // Returns an empty proto when no DDisk needs repair and no barrier is set.
     [[nodiscard]] TDirtyMapStateProto GetStateForPersist() const;
+    // The vchunk barrier to persist and the one already persisted. A record
+    // waiting for the barrier leaves the map once the persisted barrier is
+    // not below its key.
+    [[nodiscard]] TPBufferKey GetBarrierTarget() const;
+    [[nodiscard]] TPBufferKey GetPersistedBarrier() const;
     // Predicts the future state after applying vChunkConfig without changing
     // the current in-memory state.
     [[nodiscard]] TDirtyMapStateProto MakeFutureState(
@@ -231,6 +231,12 @@ private:
     // Drops a record that has nothing left to erase. Returns true if it is
     // gone from the map.
     bool RemoveIfErased(TPBufferKey pBufferKey, const TInflightInfo& inflight);
+    // Raises the barrier target over the records waiting for it, but strictly
+    // below every record whose data lives only in PBuffers.
+    void MaybeAdvanceBarrier();
+    // Forgets the records waiting for the barrier that the persisted barrier
+    // now covers.
+    void ForgetBelowBarrier();
 
     const TArenaAllocatorPoolPtr ArenaAllocatorPool;
     const IArenaAllocatorPtr ArenaAllocator;
@@ -269,6 +275,10 @@ private:
     TVector<TDDiskState> DDiskStates;
     // Changes when the behind map changes.
     ui32 StateGeneration = 0;
+    TPBufferKey BarrierTarget;
+    // The state generation in which BarrierTarget got its value.
+    ui32 BarrierTargetGeneration = 0;
+    TPBufferKey PersistedBarrier;
     // Last persisted DDisks states generation.
     ui32 PersistedStateGeneration = 0;
 

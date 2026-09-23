@@ -50,6 +50,11 @@ TBlocksDirtyMap::TBlocksDirtyMap(
         DDiskStates[ddisk].Load(ddiskState);
         ++ddisk;
     }
+
+    PersistedBarrier = TPBufferKey{
+        .Generation = state.GetBarrierGeneration(),
+        .Lsn = state.GetBarrierLsn()};
+    BarrierTarget = PersistedBarrier;
 }
 
 TBlocksDirtyMap::~TBlocksDirtyMap()
@@ -111,6 +116,8 @@ void TBlocksDirtyMap::UpdateConfig(
         Y_ABORT_UNLESS(item);
         RemoveIfErased(pBufferKey, item->Value);
     }
+
+    MaybeAdvanceBarrier();
 }
 
 void TBlocksDirtyMap::RestorePBuffer(
@@ -119,6 +126,11 @@ void TBlocksDirtyMap::RestorePBuffer(
     THostIndex host)
 {
     Y_ABORT_UNLESS(host < PBufferCounters.size());
+
+    if (pBufferKey <= PersistedBarrier) {
+        // The record was forgotten under the barrier: the copy is garbage.
+        return;
+    }
 
     if (auto item = Inflight.GetValue(pBufferKey)) {
         Y_ABORT_UNLESS(item->Range == range);
@@ -304,17 +316,7 @@ TEraseHints TBlocksDirtyMap::MakeEraseHint(size_t batchSize)
 
         for (THostIndex host: val.GetEraseNeeded()) {
             val.RequestErase(host);
-
-            if (DisabledHosts.Get(host)) {
-                // We can't handle this situation properly. Barrier cleanup
-                // will help us.
-                val.ConfirmErase(host);
-                if (RemoveIfErased(pBufferKey, val)) {
-                    break;
-                }
-            } else {
-                result.AddHint(host, item->Key);
-            }
+            result.AddHint(host, item->Key);
         }
     }
 
@@ -336,8 +338,7 @@ void TBlocksDirtyMap::WriteFinished(
     TPBufferKey pBufferKey,
     TBlockRange16 range,
     THostMask requested,
-    THostMask confirmed,
-    THostMask answered)
+    THostMask confirmed)
 {
     // Every write is pre-registered as pending at generation time (see
     // RegisterInflightWrite), so the entry always exists here.
@@ -348,30 +349,26 @@ void TBlocksDirtyMap::WriteFinished(
     auto& inflightItem = item->Value;
 
     if (confirmed.Count() < QuorumDirectBlockGroupHostCount) {
-        inflightItem.OnWriteWithoutQuorum(requested, confirmed, answered);
+        inflightItem.OnWriteWithoutQuorum(requested, confirmed);
         RemoveIfErased(pBufferKey, inflightItem);
+        MaybeAdvanceBarrier();
         return;
     }
 
-    inflightItem.OnWritten(requested, confirmed, answered);
+    inflightItem.OnWritten(requested, confirmed);
 }
 
 void TBlocksDirtyMap::OnBelatedWrite(
     TPBufferKey pBufferKey,
-    THostMask completed,
-    THostMask failed)
+    THostMask completed)
 {
     auto item = Inflight.GetValue(pBufferKey);
     if (!item) {
-        // The record left the map while this host was disabled: the map
-        // stopped waiting for it, the write executor did not. The cleanup
-        // barrier covers such a copy.
+        // The record was forgotten under the barrier: the copy is garbage.
         return;
     }
 
-    auto& inflight = item->Value;
-    inflight.OnBelatedWrite(completed, failed);
-    RemoveIfErased(pBufferKey, inflight);
+    item->Value.OnBelatedWrite(completed);
 }
 
 void TBlocksDirtyMap::FlushFinished(
@@ -412,6 +409,8 @@ void TBlocksDirtyMap::FlushFinished(
 
         inflight.FlushFailed(route.DestinationHostIndex);
     }
+
+    MaybeAdvanceBarrier();
 }
 
 void TBlocksDirtyMap::EraseFinished(
@@ -444,6 +443,8 @@ void TBlocksDirtyMap::EraseFinished(
 
         inflight.EraseFailed(host);
     }
+
+    MaybeAdvanceBarrier();
 }
 
 void TBlocksDirtyMap::SetReadablePrefixDebugOnly(
@@ -780,7 +781,13 @@ TDirtyMapStateProto TBlocksDirtyMap::GetStateForPersist() const
         }
     }
 
+    const bool hasBarrier = BarrierTarget != TPBufferKey{};
+
     TDirtyMapStateProto result;
+    if (hasBarrier) {
+        result.SetBarrierGeneration(BarrierTarget.Generation);
+        result.SetBarrierLsn(BarrierTarget.Lsn);
+    }
     if (!hasFreshDDisk) {
         return result;
     }
@@ -790,6 +797,16 @@ TDirtyMapStateProto TBlocksDirtyMap::GetStateForPersist() const
     }
 
     return result;
+}
+
+TPBufferKey TBlocksDirtyMap::GetBarrierTarget() const
+{
+    return BarrierTarget;
+}
+
+TPBufferKey TBlocksDirtyMap::GetPersistedBarrier() const
+{
+    return PersistedBarrier;
 }
 
 TDirtyMapStateProto TBlocksDirtyMap::MakeFutureState(
@@ -821,6 +838,14 @@ void TBlocksDirtyMap::StatePersisted(ui32 persistGeneration)
 {
     Y_ABORT_UNLESS(persistGeneration <= StateGeneration);
     PersistedStateGeneration = Max(PersistedStateGeneration, persistGeneration);
+
+    if (BarrierTargetGeneration != 0 &&
+        persistGeneration >= BarrierTargetGeneration &&
+        BarrierTarget > PersistedBarrier)
+    {
+        PersistedBarrier = BarrierTarget;
+        ForgetBelowBarrier();
+    }
 }
 
 ui32 TBlocksDirtyMap::GetCurrentGeneration() const
@@ -998,7 +1023,8 @@ TString TBlocksDirtyMap::DebugPrintBehindBrief() const
 {
     TStringBuilder result;
     result << "gen:" << GetCurrentGeneration() << "/"
-           << PersistedStateGeneration << " ";
+           << PersistedStateGeneration << " barrier:" << BarrierTarget.Print()
+           << "/" << PersistedBarrier.Print() << " ";
     for (THostIndex h = 0; h < GetHostCount(); ++h) {
         auto brief = DDiskStates[h].DebugPrintBehindBrief();
         if (brief) {
@@ -1221,6 +1247,59 @@ bool TBlocksDirtyMap::RemoveIfErased(
     const bool removed = Inflight.RemoveRange(pBufferKey);
     Y_ABORT_UNLESS(removed);
     return true;
+}
+
+void TBlocksDirtyMap::MaybeAdvanceBarrier()
+{
+    // The map is ordered by range, not by key: one pass finds both bounds.
+    std::optional<TPBufferKey> minPreFlush;
+    TPBufferKey target;
+    Inflight.Enumerate(
+        [&](TInflightMap::TFindItem& item)
+        {
+            const auto& inflight = item.Value;
+            if (inflight.IsPreFlush()) {
+                if (!minPreFlush || item.Key < *minPreFlush) {
+                    minPreFlush = item.Key;
+                }
+            } else if (inflight.IsWaitingForBarrier() && item.Key > target) {
+                target = item.Key;
+            }
+            return TInflightMap::EEnumerateContinuation::Continue;
+        });
+
+    if (minPreFlush && target >= *minPreFlush) {
+        // Waiting records above a pre-flush one stay until it is flushed.
+        return;
+    }
+    if (target <= BarrierTarget) {
+        return;
+    }
+
+    BarrierTarget = target;
+    ++StateGeneration;
+    BarrierTargetGeneration = StateGeneration;
+}
+
+void TBlocksDirtyMap::ForgetBelowBarrier()
+{
+    TVector<TPBufferKey> forgotten;
+    Inflight.Enumerate(
+        [&](TInflightMap::TFindItem& item)
+        {
+            if (item.Key <= PersistedBarrier &&
+                item.Value.IsWaitingForBarrier()) {
+                item.Value.ForgetByBarrier();
+                forgotten.push_back(item.Key);
+            }
+            return TInflightMap::EEnumerateContinuation::Continue;
+        });
+
+    for (const auto pBufferKey: forgotten) {
+        const auto item = Inflight.GetValue(pBufferKey);
+        Y_ABORT_UNLESS(item);
+        RemoveIfErased(pBufferKey, item->Value);
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
