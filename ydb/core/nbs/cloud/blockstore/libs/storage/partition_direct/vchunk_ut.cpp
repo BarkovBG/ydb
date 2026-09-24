@@ -173,6 +173,112 @@ Y_UNIT_TEST_SUITE(TVChunkTest)
         onStop.GetValue(TDuration::Seconds(10));
     }
 
+    // A write that got no quorum is answered with an error, but the copies
+    // that did land are still on the PBuffers. The record is kept until they
+    // are erased: forgetting it right away would leave a copy that a restart
+    // restores and flushes over newer data.
+    Y_UNIT_TEST_F(ShouldForgetWriteWithoutQuorumUnderBarrier, TBaseFixture)
+    {
+        Init();
+
+        const auto range = TBlockRange16::WithLength(10, 1);
+        ExpectedRange = range;
+        RangeData = GenerateRandomString(BlockSize * range.Size());
+
+        // Force the next generated lsn to be 123 (LsnGenerator pre-increments).
+        PartitionDirectService->LsnGenerator = 122;
+
+        auto vchunk = std::make_shared<TVChunk>(
+            Runtime->GetActorSystem(0),
+            TraceService.get(),
+            PartitionDirectService.get(),
+            DiskDescription,
+            VChunkConfig,
+            false,
+            DirtyMapStateProto,
+            DirectBlockGroup,
+            3,   // syncRequestsBatchSize
+            DefaultBlockSize,
+            DefaultVChunkSize);
+        vchunk->Start();
+
+        auto callContext = MakeIntrusive<TCallContext>(static_cast<ui64>(0));
+        auto request =
+            std::make_shared<TWriteBlocksLocalRequest>(TRequestHeaders{
+                .VolumeConfig = PartitionDirectService->GetVolumeConfig(),
+                .RequestId = 1,
+                .Range = ConvertRangeSafe<TBlockRange64>(range)});
+        request->Sglist = MakeSgList();
+
+        auto future =
+            vchunk->WriteBlocksLocal(callContext, request, NWilson::TTraceId());
+
+        UNIT_ASSERT_VALUES_EQUAL(
+            true,
+            WaitWriteRequests(3, TDuration::Seconds(10)));
+
+        // Every PBuffer answers with an error: the quorum is unreachable and
+        // the client gets an error.
+        SetWriteResult(
+            TDBGWriteBlocksResponse{.Error = MakeError(E_IO, "disk error")},
+            true);
+
+        const auto& result = future.GetValue(TDuration::Seconds(10));
+        UNIT_ASSERT_VALUES_EQUAL(E_IO, result.Error.GetCode());
+
+        // The record is still in the dirty map: it holds the cleanup barrier.
+        UNIT_ASSERT_VALUES_EQUAL(
+            MakeKey(123).Print(),
+            GetSafeBarrierOnExecutor(DirectBlockGroup->GetExecutor(), *vchunk)
+                ->Print());
+
+        // Erase goes once to every host that was asked to write: the three
+        // desired ones and the two handoffs the hedge wrote to, whose writes
+        // are still in flight.
+        UNIT_ASSERT_VALUES_EQUAL(
+            true,
+            WaitScheduledTasks(1, TDuration::Seconds(10)));
+        RunScheduledTasks();
+        UNIT_ASSERT_VALUES_EQUAL(
+            true,
+            WaitEraseRequests(5, TDuration::Seconds(10)));
+        SetEraseResult(TDBGEraseResponse{.Error = MakeError(S_OK)}, true);
+        DrainExecutor(DirectBlockGroup->GetExecutor());
+
+        // No host confirmed the write, so the erase answers prove nothing:
+        // the record waits for the vchunk barrier, which is persisted with
+        // the dirty map state.
+        UNIT_ASSERT_VALUES_EQUAL(
+            1,
+            PartitionDirectService->UpdateDirtyMapStateRequests.size());
+        const auto& persisted =
+            PartitionDirectService->UpdateDirtyMapStateRequests.back().Proto;
+        UNIT_ASSERT_VALUES_EQUAL(MakeKey(123).Lsn, persisted.GetBarrierLsn());
+        UNIT_ASSERT_VALUES_EQUAL(
+            MakeKey(123).Generation,
+            persisted.GetBarrierGeneration());
+        UNIT_ASSERT_VALUES_EQUAL(
+            MakeKey(123).Print(),
+            GetSafeBarrierOnExecutor(DirectBlockGroup->GetExecutor(), *vchunk)
+                ->Print());
+
+        // Once the barrier is persisted the record leaves the dirty map and
+        // releases the cleanup barrier.
+        UNIT_ASSERT_VALUES_EQUAL(1, ReplyUpdateDirtyMapStateRequests());
+        DrainExecutor(DirectBlockGroup->GetExecutor());
+        UNIT_ASSERT(
+            !GetSafeBarrierOnExecutor(DirectBlockGroup->GetExecutor(), *vchunk)
+                 .has_value());
+
+        // The handoffs answer with an error after that: nothing to report.
+        SetWriteResult(
+            TDBGWriteBlocksResponse{.Error = MakeError(E_IO, "disk error")},
+            true);
+        DrainExecutor(DirectBlockGroup->GetExecutor());
+
+        vchunk->Stop().GetValue(TDuration::Seconds(10));
+    }
+
     Y_UNIT_TEST_F(ShouldPersistTouchedBeforeFirstFlush, TBaseFixture)
     {
         Init();

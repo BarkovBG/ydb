@@ -486,6 +486,8 @@ void TVChunk::OnWriteBlocksResponse(
 
     UpdatePendingCounters();
     DoFlush(false);
+    // A write without quorum may have raised the vchunk barrier.
+    StartPersist();
     ScheduleCleaningUp();
 }
 
@@ -502,12 +504,9 @@ void TVChunk::OnBelatedWriteBlocksResponse(
         LogTitle.GetWithTime().c_str(),
         bundle->GetVChunkRange().Print().c_str());
 
-    BlocksDirtyMap->UpdateBelatedEraseQueue(
-        completedWrites,
-        bundle->GetPBufferKey());
+    BlocksDirtyMap->OnBelatedWrite(bundle->GetPBufferKey(), completedWrites);
 
-    DoErase(false, TBlocksDirtyMap::EEraseType::Belated);
-    StartPersist();
+    DoErase(false);
     ScheduleCleaningUp();
 }
 
@@ -579,7 +578,7 @@ void TVChunk::UpdateDirtyMap(const TDBGRestoreResponse& response)
     }
 
     DoFlush(false);
-    DoErase(false, TBlocksDirtyMap::EEraseType::Standard);
+    DoErase(false);
     StartPersist();
 }
 
@@ -878,12 +877,12 @@ void TVChunk::OnFlushResponse(const TFlushRequestExecutor::TResponse& response)
 
     UpdatePendingCounters();
 
-    DoErase(false, TBlocksDirtyMap::EEraseType::Standard);
+    DoErase(false);
     StartPersist();
     ScheduleCleaningUp();
 }
 
-void TVChunk::DoErase(bool force, TBlocksDirtyMap::EEraseType eraseType)
+void TVChunk::DoErase(bool force)
 {
     Y_ABORT_UNLESS(ExecutorThreadChecker.Check());
 
@@ -891,16 +890,8 @@ void TVChunk::DoErase(bool force, TBlocksDirtyMap::EEraseType eraseType)
         return;
     }
 
-    TEraseHints hints;
-    switch (eraseType) {
-        case TBlocksDirtyMap::EEraseType::Standard:
-            hints = BlocksDirtyMap->MakeEraseHint(
-                force ? 1 : SyncRequestsBatchSize);
-            break;
-        case TBlocksDirtyMap::EEraseType::Belated:
-            hints = BlocksDirtyMap->MakeEraseBelatedHint();
-            break;
-    };
+    auto hints =
+        BlocksDirtyMap->MakeEraseHint(force ? 1 : SyncRequestsBatchSize);
 
     LOG_DEBUG(
         *ActorSystem,
@@ -923,19 +914,12 @@ void TVChunk::DoErase(bool force, TBlocksDirtyMap::EEraseType eraseType)
 
         auto future = eraseExecutor->GetFuture();
         future.Subscribe(
-            [weakSelf = weak_from_this(), eraseType]   //
+            [weakSelf = weak_from_this()]   //
             (const TFuture<TEraseRequestExecutor::TResponse>& f) mutable
             {
                 // Executor thread
                 if (auto self = weakSelf.lock()) {
-                    switch (eraseType) {
-                        case TBlocksDirtyMap::EEraseType::Standard:
-                            self->OnEraseResponse(f.GetValue());
-                            break;
-                        case TBlocksDirtyMap::EEraseType::Belated:
-                            self->OnEraseBelatedResponse(f.GetValue());
-                            break;
-                    };
+                    self->OnEraseResponse(f.GetValue());
                 }
             });
 
@@ -966,22 +950,8 @@ void TVChunk::OnEraseResponse(const TEraseRequestExecutor::TResponse& response)
     }
 
     UpdatePendingCounters();
-    ScheduleCleaningUp();
-}
-
-void TVChunk::OnEraseBelatedResponse(
-    const TEraseRequestExecutor::TResponse& response)
-{
-    Y_ABORT_UNLESS(ExecutorThreadChecker.Check());
-
-    for (size_t i = 0; i < response.EraseOk.size(); ++i) {
-        Stats.RequestFinished(EVChunkOperation::EraseBelated, true);
-    }
-    for (size_t i = 0; i < response.EraseFailed.size(); ++i) {
-        Stats.RequestFinished(EVChunkOperation::EraseBelated, false);
-    }
-
-    UpdatePendingCounters();
+    // A record with nothing left to erase may have raised the barrier.
+    StartPersist();
     ScheduleCleaningUp();
 }
 
@@ -1059,6 +1029,8 @@ void TVChunk::OnDirtyMapPersisted(ui32 stateGeneration, THostMask freshDDisks)
     BlocksDirtyMap->StatePersisted(stateGeneration);
     PersistedFreshDDisks = freshDDisks;
     StartPersist();
+    // The persisted barrier may have forgotten records that gated erases.
+    DoErase(false);
     DemoteIfNeeded();
     ScheduleCleaningUp();
 }
@@ -1168,7 +1140,7 @@ void TVChunk::CleaningUp()
         BlocksDirtyMap->NeedErase() ? "NeedErase" : "");
 
     DoFlush(true);
-    DoErase(true, TBlocksDirtyMap::EEraseType::Standard);
+    DoErase(true);
     StartPersist();
 }
 
@@ -1182,9 +1154,6 @@ void TVChunk::UpdatePendingCounters()
     Stats.UpdatePending(
         EVChunkOperation::Erase,
         BlocksDirtyMap->GetErasePendingCount());
-    Stats.UpdatePending(
-        EVChunkOperation::EraseBelated,
-        BlocksDirtyMap->GetEraseBelatedCount());
     Stats.UpdateMinLsn(
         EVChunkOperation::Flush,
         BlocksDirtyMap->GetMinFlushPendingLsn());

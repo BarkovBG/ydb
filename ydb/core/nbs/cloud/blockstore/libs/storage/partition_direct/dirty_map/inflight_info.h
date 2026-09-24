@@ -123,14 +123,25 @@ public:
         // Read from DDisk.
         PBufferFlushed,
 
-        // The data is now being erasing from the PBuffers.
+        // The write got no quorum: the client got an error and this record
+        // will never be flushed to DDisk. The copies that did land still
+        // have to be erased, the same way as after a flush.
         // Read from DDisk.
-        PBufferErasing,
+        PBufferDiscarded,
 
-        // The data is erased from the PBuffers.
+        // Every confirmed copy is erased, or the record was forgotten by the
+        // vchunk barrier. Reached from PBufferFlushed and PBufferDiscarded.
         // Read from DDisk.
         PBufferErased,
     };
+
+    // The state says what happened to the data. What happened to the copies
+    // is kept in the masks: EraseRequested, EraseConfirmed. Erasing is
+    // allowed in PBufferFlushed (the data is on DDisk already) and in
+    // PBufferDiscarded (the write was answered with an error, so erasing a
+    // copy cannot lose anything), and nowhere else. Every requested host is
+    // erased once; the erase answer of a host that never confirmed the write
+    // proves nothing, so such a host is left to the vchunk barrier.
 
     TInflightInfo(
         IReadyQueue* readyQueue,
@@ -147,9 +158,21 @@ public:
     // Instance of PBuffer record found on host during recovery.
     void RestorePBuffer(THostIndex host);
 
-    // Transitions a pending write (see the byteCount-only constructor) to the
-    // written state once a quorum of PBuffers confirmed it.
+    // Transitions a pending write to the written state once a quorum of
+    // PBuffers confirmed it.
     void OnWritten(THostMask writeRequested, THostMask writeConfirmed);
+
+    // Transitions a pending write to PBufferDiscarded: the quorum was not
+    // reached and the client got an error, but the copies that did land
+    // still have to be erased.
+    void OnWriteWithoutQuorum(
+        THostMask writeRequested,
+        THostMask writeConfirmed);
+
+    // Successful answers that came after the client had been replied to. A
+    // host erased before its answer stays unconfirmed and is not erased
+    // again: what that erase missed is left to the vchunk barrier.
+    void OnBelatedWrite(THostMask completed);
 
     [[nodiscard]] EState GetState() const;
 
@@ -171,9 +194,15 @@ public:
     void RequestErase(THostIndex host);
     void ConfirmErase(THostIndex host);
     void EraseFailed(THostIndex host);
-    // Hosts where a write was requested but erase is not yet
-    // requested/confirmed.
+    // Requested hosts not yet requested or confirmed for erase.
     [[nodiscard]] THostMask GetEraseNeeded() const;
+    // True while the data lives only in PBuffers.
+    [[nodiscard]] bool IsPreFlush() const;
+    // True when nothing is left to erase, yet a requested host never
+    // confirmed the write or is disabled: only the vchunk barrier can end it.
+    [[nodiscard]] bool IsWaitingForBarrier() const;
+    // Ends a record waiting for the barrier once the barrier is persisted.
+    void ForgetByBarrier();
 
     // Update state according to the changed configuration.
     void UpdateHosts(THostMask added, THostMask removed, THostMask disabled);
@@ -205,8 +234,20 @@ private:
     void CheckInvariants() const;
 
     void MaybeAdvanceToFlushed();
+    // Moves the record to PBufferErased when nothing is left to erase. Works
+    // both for a record that was flushed and for one kept only for its copies.
     void MaybeAdvanceToErased();
     void MaybeQueryErase();
+
+    // True while erasing copies is allowed: the data is on DDisk or the
+    // write was answered with an error.
+    [[nodiscard]] bool CanErase() const;
+    // Drops an erase attempt that proved nothing and asks for a new one.
+    void RetryErase(THostIndex host);
+    // True when every host that was asked to write has confirmed both the
+    // write and the erase, so the record can leave the map without the
+    // barrier.
+    [[nodiscard]] bool CanForget() const;
 
     [[nodiscard]] TPBufferKey GetPBufferKey() const;
 

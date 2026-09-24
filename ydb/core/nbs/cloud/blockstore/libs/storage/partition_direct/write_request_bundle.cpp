@@ -60,10 +60,12 @@ void TWriteRequestBundle::Reply(
     }
 }
 
-void TWriteRequestBundle::NotifyBelated(THostMask hosts)
+void TWriteRequestBundle::NotifyBelated(THostMask completedWrites)
 {
     if (auto client = WriteClient.lock()) {
-        client->OnBelatedWriteBlocksResponse(shared_from_this(), hosts);
+        client->OnBelatedWriteBlocksResponse(
+            shared_from_this(),
+            completedWrites);
     }
 }
 

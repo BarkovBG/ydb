@@ -703,7 +703,7 @@ Y_UNIT_TEST_SUITE(TDirtyMapTest)
         UNIT_ASSERT_VALUES_EQUAL(0, dirtyMap->GetInflightCount());
     }
 
-    Y_UNIT_TEST(ShouldNotHoldSafeBarrierForSubQuorumWrite)
+    Y_UNIT_TEST(ShouldHoldSafeBarrierForSubQuorumWriteUntilErased)
     {
         const auto vchunkConfig = MakeTestVChunkConfig();
         auto dirtyMap = MakeDirtyMap(vchunkConfig);
@@ -716,13 +716,40 @@ Y_UNIT_TEST_SUITE(TDirtyMapTest)
             MakeKey(123).Print(),
             dirtyMap->GetSafeBarrierForErase()->Print());
 
-        // A write that fails to reach a quorum of PBuffers drops its pending
-        // entry and stops holding the barrier.
+        // A write that fails to reach a quorum of PBuffers keeps holding the
+        // barrier: its copies are still on the PBuffers.
         dirtyMap->WriteFinished(
             MakeKey(123),
             range,
             MakePrimaryHosts(),
-            MakeHostMask(true, true, false, false, false));   // 2 < quorum 3
+            MakeHostMask(true, true, false, false, false));
+        UNIT_ASSERT_VALUES_EQUAL(
+            MakeKey(123).Print(),
+            dirtyMap->GetSafeBarrierForErase()->Print());
+        UNIT_ASSERT_VALUES_EQUAL(1, dirtyMap->GetInflightCount());
+
+        // Every requested host is erased once; H2 never confirmed, so its
+        // erase answer proves nothing.
+        auto eraseHints = dirtyMap->MakeEraseHint(1);
+        UNIT_ASSERT_VALUES_EQUAL(
+            "H0:1:123;"
+            "H1:1:123;"
+            "H2:1:123;",
+            eraseHints.DebugPrint());
+        EraseAll(eraseHints, *dirtyMap);
+
+        // The record keeps holding the barrier until the vchunk barrier that
+        // covers it is persisted.
+        UNIT_ASSERT_VALUES_EQUAL(
+            MakeKey(123).Print(),
+            dirtyMap->GetSafeBarrierForErase()->Print());
+        UNIT_ASSERT_VALUES_EQUAL(1, dirtyMap->GetInflightCount());
+        UNIT_ASSERT_VALUES_EQUAL(true, dirtyMap->NeedPersist());
+        UNIT_ASSERT_VALUES_EQUAL(
+            MakeKey(123).Print(),
+            dirtyMap->GetBarrierTarget().Print());
+
+        dirtyMap->StatePersisted(dirtyMap->GetCurrentGeneration());
         UNIT_ASSERT(!dirtyMap->GetSafeBarrierForErase().has_value());
         UNIT_ASSERT_VALUES_EQUAL(0, dirtyMap->GetInflightCount());
     }
@@ -791,12 +818,18 @@ Y_UNIT_TEST_SUITE(TDirtyMapTest)
         dirtyMap->EraseFinished(THostIndex{2}, {}, {MakeKey(100)});
         UNIT_ASSERT_VALUES_EQUAL(1, dirtyMap->GetInflightCount());
 
-        // The host gets disabled; the re-queued erase is confirmed on its
-        // behalf and the record leaves the inflight map.
+        // The host gets disabled: its copy is left to the vchunk barrier,
+        // nothing is sent to it, and the record waits for the persist.
         vchunkConfig.DisableHost(2);
         dirtyMap->UpdateConfig(vchunkConfig, true);
         auto retryHints = dirtyMap->MakeEraseHint(1);
         UNIT_ASSERT(retryHints.Empty());
+        UNIT_ASSERT_VALUES_EQUAL(1, dirtyMap->GetInflightCount());
+        UNIT_ASSERT_VALUES_EQUAL(
+            MakeKey(100).Print(),
+            dirtyMap->GetBarrierTarget().Print());
+
+        dirtyMap->StatePersisted(dirtyMap->GetCurrentGeneration());
         UNIT_ASSERT_VALUES_EQUAL(0, dirtyMap->GetInflightCount());
 
         // The genuine response from the disabled host finally arrives.
@@ -1052,7 +1085,13 @@ Y_UNIT_TEST_SUITE(TDirtyMapTest)
             "H2:1:123;",
             eraseHints.DebugPrint());
         EraseAll(eraseHints, *dirtyMap);
-        // Should remove inflight items
+        // The copy on the disabled host 0 is left to the vchunk barrier: the
+        // record stays until the barrier is persisted.
+        UNIT_ASSERT_VALUES_EQUAL(1, dirtyMap->GetInflightCount());
+        UNIT_ASSERT_VALUES_EQUAL(
+            MakeKey(123).Print(),
+            dirtyMap->GetBarrierTarget().Print());
+        dirtyMap->StatePersisted(dirtyMap->GetCurrentGeneration());
         UNIT_ASSERT_VALUES_EQUAL(0, dirtyMap->GetInflightCount());
     }
 
@@ -1173,6 +1212,266 @@ Y_UNIT_TEST_SUITE(TDirtyMapTest)
             newerHint.DebugPrint().find(":20[") != TString::npos,
             "newer write must flush after the older one landed: "
                 << newerHint.DebugPrint());
+    }
+
+    Y_UNIT_TEST(ShouldEraseCopyOfWriteWithoutQuorum)
+    {
+        const auto vchunkConfig = MakeTestVChunkConfig();
+        auto dirtyMap = MakeDirtyMap(vchunkConfig);
+
+        const auto range = TBlockRange16::WithLength(10, 10);
+
+        // The write got no quorum and the client got an error, but H0 did
+        // write the data.
+        dirtyMap->RegisterInflightWrite(MakeKey(5), range);
+        dirtyMap->WriteFinished(
+            MakeKey(5),
+            range,
+            MakePrimaryHosts(),
+            MakeHostMask(true, false, false, false, false));
+
+        UNIT_ASSERT_VALUES_EQUAL(1, dirtyMap->GetInflightCount());
+
+        // A newer overlapping write is written and flushed.
+        dirtyMap->RegisterInflightWrite(MakeKey(12), range);
+        dirtyMap->WriteFinished(
+            MakeKey(12),
+            range,
+            MakePrimaryHosts(),
+            MakePrimaryHosts());
+        FlushAll(dirtyMap->MakeFlushHint(1), *dirtyMap);
+
+        // The write without quorum is erased first on every requested host,
+        // the newer record waits for it.
+        auto eraseHints = dirtyMap->MakeEraseHint(1);
+        UNIT_ASSERT_VALUES_EQUAL(
+            "H0:1:5;"
+            "H1:1:5;"
+            "H2:1:5;",
+            eraseHints.DebugPrint());
+        EraseAll(eraseHints, *dirtyMap);
+        UNIT_ASSERT_VALUES_EQUAL(2, dirtyMap->GetInflightCount());
+
+        // H1 and H2 never confirmed the write: the record waits for the
+        // vchunk barrier. The newer record is flushed, so it does not cap it.
+        UNIT_ASSERT_VALUES_EQUAL(
+            MakeKey(5).Print(),
+            dirtyMap->GetBarrierTarget().Print());
+        dirtyMap->StatePersisted(dirtyMap->GetCurrentGeneration());
+        UNIT_ASSERT_VALUES_EQUAL(1, dirtyMap->GetInflightCount());
+
+        eraseHints = dirtyMap->MakeEraseHint(1);
+        UNIT_ASSERT_VALUES_EQUAL(
+            "H0:1:12;"
+            "H1:1:12;"
+            "H2:1:12;",
+            eraseHints.DebugPrint());
+    }
+
+    Y_UNIT_TEST(ShouldNotEraseAgainAfterBelatedAnswer)
+    {
+        const auto vchunkConfig = MakeTestVChunkConfig();
+        auto dirtyMap = MakeDirtyMap(vchunkConfig);
+
+        const auto range = TBlockRange16::WithLength(10, 10);
+
+        // The quorum is reached without H3, which has not answered yet.
+        dirtyMap->RegisterInflightWrite(MakeKey(5), range);
+        dirtyMap->WriteFinished(
+            MakeKey(5),
+            range,
+            MakeHostMask(true, true, true, true, false),
+            MakePrimaryHosts());
+        FlushAll(dirtyMap->MakeFlushHint(1), *dirtyMap);
+
+        // Every requested host is erased once, H3 included.
+        auto eraseHints = dirtyMap->MakeEraseHint(1);
+        UNIT_ASSERT_VALUES_EQUAL(
+            "H0:1:5;"
+            "H1:1:5;"
+            "H2:1:5;"
+            "H3:1:5;",
+            eraseHints.DebugPrint());
+
+        EraseAll(eraseHints, *dirtyMap);
+
+        // H3 has not answered the write: its erase may have run before the
+        // copy landed, so the record is kept and the barrier target is set.
+        UNIT_ASSERT_VALUES_EQUAL(1, dirtyMap->GetInflightCount());
+        UNIT_ASSERT_VALUES_EQUAL(
+            MakeKey(5).Print(),
+            dirtyMap->GetBarrierTarget().Print());
+
+        // H3 answers after its erase: nothing is erased again, the record
+        // still waits for the barrier.
+        dirtyMap->OnBelatedWrite(
+            MakeKey(5),
+            THostMask::MakeMask({THostIndex{3}}));
+        UNIT_ASSERT_VALUES_EQUAL(false, dirtyMap->NeedErase());
+        UNIT_ASSERT_VALUES_EQUAL(1, dirtyMap->GetInflightCount());
+
+        dirtyMap->StatePersisted(dirtyMap->GetCurrentGeneration());
+        UNIT_ASSERT_VALUES_EQUAL(0, dirtyMap->GetInflightCount());
+    }
+
+    Y_UNIT_TEST(ShouldCountBelatedAnswerBeforeErase)
+    {
+        const auto vchunkConfig = MakeTestVChunkConfig();
+        auto dirtyMap = MakeDirtyMap(vchunkConfig);
+
+        const auto range = TBlockRange16::WithLength(10, 10);
+
+        // H0 answered before the request timed out, H1 and H2 have not
+        // answered yet: the client got an error, but H0 holds a copy.
+        dirtyMap->RegisterInflightWrite(MakeKey(5), range);
+        dirtyMap->WriteFinished(
+            MakeKey(5),
+            range,
+            MakePrimaryHosts(),
+            MakeHostMask(true, false, false, false, false));
+
+        // H1 answers OK before any erase was sent: it counts as confirmed.
+        dirtyMap->OnBelatedWrite(
+            MakeKey(5),
+            THostMask::MakeMask({THostIndex{1}}));
+
+        // Every requested host is erased once.
+        auto eraseHints = dirtyMap->MakeEraseHint(1);
+        UNIT_ASSERT_VALUES_EQUAL(
+            "H0:1:5;"
+            "H1:1:5;"
+            "H2:1:5;",
+            eraseHints.DebugPrint());
+        EraseAll(eraseHints, *dirtyMap);
+
+        // H2 never confirmed the write: only the vchunk barrier ends the
+        // record.
+        UNIT_ASSERT_VALUES_EQUAL(1, dirtyMap->GetInflightCount());
+        UNIT_ASSERT_VALUES_EQUAL(false, dirtyMap->NeedErase());
+        UNIT_ASSERT_VALUES_EQUAL(
+            MakeKey(5).Print(),
+            dirtyMap->GetBarrierTarget().Print());
+
+        dirtyMap->StatePersisted(dirtyMap->GetCurrentGeneration());
+        UNIT_ASSERT_VALUES_EQUAL(0, dirtyMap->GetInflightCount());
+        UNIT_ASSERT_VALUES_EQUAL(
+            MakeKey(5).Print(),
+            dirtyMap->GetPersistedBarrier().Print());
+
+        // A late answer for the forgotten record is ignored.
+        dirtyMap->OnBelatedWrite(
+            MakeKey(5),
+            THostMask::MakeMask({THostIndex{2}}));
+        UNIT_ASSERT_VALUES_EQUAL(0, dirtyMap->GetInflightCount());
+    }
+
+    Y_UNIT_TEST(ShouldNotRaiseBarrierAbovePreFlushRecord)
+    {
+        const auto vchunkConfig = MakeTestVChunkConfig();
+        auto dirtyMap = MakeDirtyMap(vchunkConfig);
+
+        const auto range = TBlockRange16::WithLength(10, 10);
+        const auto otherRange = TBlockRange16::WithLength(100, 10);
+
+        // lsn 3 is written but not flushed: its data lives only in PBuffers.
+        dirtyMap->RegisterInflightWrite(MakeKey(3), range);
+        dirtyMap->WriteFinished(
+            MakeKey(3),
+            range,
+            MakePrimaryHosts(),
+            MakePrimaryHosts());
+
+        // lsn 5 got no quorum and H1, H2 never answered.
+        dirtyMap->RegisterInflightWrite(MakeKey(5), otherRange);
+        dirtyMap->WriteFinished(
+            MakeKey(5),
+            otherRange,
+            MakePrimaryHosts(),
+            MakeHostMask(true, false, false, false, false));
+        EraseAll(dirtyMap->MakeEraseHint(1), *dirtyMap);
+        UNIT_ASSERT_VALUES_EQUAL(2, dirtyMap->GetInflightCount());
+
+        // A barrier over lsn 5 would drop lsn 3 on restore: no target yet.
+        UNIT_ASSERT_VALUES_EQUAL(false, dirtyMap->NeedPersist());
+        UNIT_ASSERT_VALUES_EQUAL(
+            TPBufferKey{}.Print(),
+            dirtyMap->GetBarrierTarget().Print());
+
+        // Once lsn 3 is flushed, lsn 5 can go under the barrier.
+        FlushAll(dirtyMap->MakeFlushHint(1), *dirtyMap);
+        UNIT_ASSERT_VALUES_EQUAL(
+            MakeKey(5).Print(),
+            dirtyMap->GetBarrierTarget().Print());
+        UNIT_ASSERT_VALUES_EQUAL(true, dirtyMap->NeedPersist());
+
+        dirtyMap->StatePersisted(dirtyMap->GetCurrentGeneration());
+        UNIT_ASSERT_VALUES_EQUAL(1, dirtyMap->GetInflightCount());
+        EraseAll(dirtyMap->MakeEraseHint(1), *dirtyMap);
+        UNIT_ASSERT_VALUES_EQUAL(0, dirtyMap->GetInflightCount());
+    }
+
+    Y_UNIT_TEST(ShouldSkipRestoredCopiesBelowBarrier)
+    {
+        const auto vchunkConfig = MakeTestVChunkConfig();
+
+        TDirtyMapStateProto state;
+        state.SetBarrierGeneration(MakeKey(5).Generation);
+        state.SetBarrierLsn(MakeKey(5).Lsn);
+        auto dirtyMap = std::make_shared<TBlocksDirtyMap>(
+            CreateArenaAllocatorPool(),
+            vchunkConfig,
+            true,
+            state,
+            DefaultBlockSize,
+            GetVChunkBlockCount(DefaultBlockSize, DefaultVChunkSize));
+        UNIT_ASSERT_VALUES_EQUAL(
+            MakeKey(5).Print(),
+            dirtyMap->GetPersistedBarrier().Print());
+
+        const auto range = TBlockRange16::WithLength(10, 10);
+
+        // Copies at or below the barrier are garbage and are not restored.
+        dirtyMap->RestorePBuffer(MakeKey(4), range, THostIndex{0});
+        dirtyMap->RestorePBuffer(MakeKey(5), range, THostIndex{2});
+        UNIT_ASSERT_VALUES_EQUAL(0, dirtyMap->GetInflightCount());
+
+        // A copy above the barrier is restored as usual.
+        dirtyMap->RestorePBuffer(MakeKey(6), range, THostIndex{0});
+        UNIT_ASSERT_VALUES_EQUAL(1, dirtyMap->GetInflightCount());
+    }
+
+    Y_UNIT_TEST(ShouldCoalesceBarrierTargets)
+    {
+        const auto vchunkConfig = MakeTestVChunkConfig();
+        auto dirtyMap = MakeDirtyMap(vchunkConfig);
+
+        const auto range = TBlockRange16::WithLength(10, 10);
+        const auto otherRange = TBlockRange16::WithLength(100, 10);
+
+        // Two writes without quorum, each with silent hosts.
+        dirtyMap->RegisterInflightWrite(MakeKey(5), range);
+        dirtyMap->WriteFinished(
+            MakeKey(5),
+            range,
+            MakePrimaryHosts(),
+            MakeHostMask(true, false, false, false, false));
+        dirtyMap->RegisterInflightWrite(MakeKey(7), otherRange);
+        dirtyMap->WriteFinished(
+            MakeKey(7),
+            otherRange,
+            MakePrimaryHosts(),
+            MakeHostMask(false, true, false, false, false));
+        EraseAll(dirtyMap->MakeEraseHint(1), *dirtyMap);
+        UNIT_ASSERT_VALUES_EQUAL(2, dirtyMap->GetInflightCount());
+
+        // One target covers both.
+        UNIT_ASSERT_VALUES_EQUAL(
+            MakeKey(7).Print(),
+            dirtyMap->GetBarrierTarget().Print());
+
+        dirtyMap->StatePersisted(dirtyMap->GetCurrentGeneration());
+        UNIT_ASSERT_VALUES_EQUAL(0, dirtyMap->GetInflightCount());
+        UNIT_ASSERT_VALUES_EQUAL(false, dirtyMap->NeedPersist());
     }
 
     Y_UNIT_TEST(ShouldEraseOverlappingWritesInAscendingOrder)
@@ -1916,9 +2215,10 @@ Y_UNIT_TEST_SUITE(TDirtyMapTest)
             MakePrimaryHosts(),
             MakeHostMask(true, true, false, false, false));
 
-        // write result with no quorum is skipped
+        // The record without quorum is kept until its copies are erased, but
+        // it is invisible to reads.
         UNIT_ASSERT_VALUES_EQUAL(
-            inflightCounterBeforeWrite,
+            inflightCounterBeforeWrite + 1,
             dirtyMap->GetInflightCount());
 
         auto readHint =
@@ -2019,7 +2319,7 @@ Y_UNIT_TEST_SUITE(TDirtyMapTest)
             readHint.DebugPrint());
     }
 
-    Y_UNIT_TEST(ShouldEraseDisabledHostsAutomatically)
+    Y_UNIT_TEST(ShouldLeaveDisabledHostToBarrier)
     {
         auto vchunkConfig = MakeTestVChunkConfig();
         auto dirtyMap = MakeDirtyMap(vchunkConfig);
@@ -2052,8 +2352,14 @@ Y_UNIT_TEST_SUITE(TDirtyMapTest)
             eraseHints.DebugPrint());
         EraseAll(eraseHints, *dirtyMap);
 
-        // The disabled host's erase was auto-confirmed, so inflight should be
-        // clear.
+        // The disabled host's copy is left to the vchunk barrier: the record
+        // stays until the barrier is persisted.
+        UNIT_ASSERT_VALUES_EQUAL(1, dirtyMap->GetInflightCount());
+        UNIT_ASSERT_VALUES_EQUAL(
+            MakeKey(123).Print(),
+            dirtyMap->GetBarrierTarget().Print());
+
+        dirtyMap->StatePersisted(dirtyMap->GetCurrentGeneration());
         UNIT_ASSERT_VALUES_EQUAL(0, dirtyMap->GetInflightCount());
     }
 
@@ -2081,12 +2387,24 @@ Y_UNIT_TEST_SUITE(TDirtyMapTest)
             MakeKey(100).Print(),
             dirtyMap->GetSafeBarrierForErase()->Print());
 
-        // Completing write 100 with sub-quorum drops it.
+        // Completing write 100 with sub-quorum keeps it until its copies are
+        // erased.
         dirtyMap->WriteFinished(
             MakeKey(100),
             TBlockRange16::WithLength(10, 10),
             MakePrimaryHosts(),
             MakeHostMask(true, true, false, false, false));
+        UNIT_ASSERT_VALUES_EQUAL(
+            MakeKey(100).Print(),
+            dirtyMap->GetSafeBarrierForErase()->Print());
+
+        EraseAll(dirtyMap->MakeEraseHint(1), *dirtyMap);
+        // H2 never confirmed write 100: it stays until the vchunk barrier is
+        // persisted, and the pending write 200 does not cap that barrier.
+        UNIT_ASSERT_VALUES_EQUAL(
+            MakeKey(100).Print(),
+            dirtyMap->GetSafeBarrierForErase()->Print());
+        dirtyMap->StatePersisted(dirtyMap->GetCurrentGeneration());
         UNIT_ASSERT_VALUES_EQUAL(
             MakeKey(200).Print(),
             dirtyMap->GetSafeBarrierForErase()->Print());
@@ -2164,7 +2482,12 @@ Y_UNIT_TEST_SUITE(TDirtyMapTest)
         // Erase should only cover hosts that still have write data (0 and 2).
         UNIT_ASSERT_VALUES_EQUAL("H0:1:123;H2:1:123;", eraseHints.DebugPrint());
         EraseAll(eraseHints, *dirtyMap);
-        // Inflight should be fully cleaned up.
+        // The copy on the evacuated host 1 is left to the vchunk barrier.
+        UNIT_ASSERT_VALUES_EQUAL(1, dirtyMap->GetInflightCount());
+        UNIT_ASSERT_VALUES_EQUAL(
+            MakeKey(123).Print(),
+            dirtyMap->GetBarrierTarget().Print());
+        dirtyMap->StatePersisted(dirtyMap->GetCurrentGeneration());
         UNIT_ASSERT_VALUES_EQUAL(0, dirtyMap->GetInflightCount());
     }
 
@@ -2207,11 +2530,20 @@ Y_UNIT_TEST_SUITE(TDirtyMapTest)
         // Inflight item still present — host 1 erase pending.
         UNIT_ASSERT_VALUES_EQUAL(1, dirtyMap->GetInflightCount());
 
-        // Evacuate host 1
+        // Evacuate host 1: its erase in flight may never answer, so it does
+        // not hold the record. The copy is left to the vchunk barrier.
         vchunkConfig.EvacuateHost(1);
         dirtyMap->UpdateConfig(vchunkConfig, true);
+        UNIT_ASSERT_VALUES_EQUAL(1, dirtyMap->GetInflightCount());
+        UNIT_ASSERT_VALUES_EQUAL(
+            MakeKey(123).Print(),
+            dirtyMap->GetBarrierTarget().Print());
 
-        // The inflight item should be fully erased and removed from the map.
+        dirtyMap->StatePersisted(dirtyMap->GetCurrentGeneration());
+        UNIT_ASSERT_VALUES_EQUAL(0, dirtyMap->GetInflightCount());
+
+        // The late erase answer from the evacuated host is ignored.
+        dirtyMap->EraseFinished(THostIndex{1}, {MakeKey(123)}, {});
         UNIT_ASSERT_VALUES_EQUAL(0, dirtyMap->GetInflightCount());
     }
 

@@ -98,10 +98,13 @@ the persist-before-erase condition.
 
 Explicit erase batches target the PB positions where writes were requested,
 including handoffs. They are separate requests to each PB. Failed erases are
-eligible for retry. Disabled hosts can be accounted as erased locally, with
-barrier cleanup responsible for their residual records. Belated successful
-writes have a separate erase queue. For the disk-level meaning of exact
-erases, compact erase records and barriers, use the shared PB page.
+eligible for retry. A record leaves the dirty map when every host it was asked
+to write to has confirmed both the write and the erase. A host that never
+confirmed the write, or was disabled, is left to the vchunk barrier: the dirty
+map persists a per-vchunk barrier key, records below it are forgotten, copies
+below it are skipped on recovery and cleaned by barrier cleanup. For the
+disk-level meaning of exact erases, compact erase records and barriers, use the
+shared PB page.
 
 ## Persisted DDisk state and repair
 

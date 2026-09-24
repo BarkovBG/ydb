@@ -33,12 +33,6 @@ class TBlocksDirtyMap
     , public std::enable_shared_from_this<TBlocksDirtyMap>
 {
 public:
-    enum class EEraseType
-    {
-        Standard,
-        Belated
-    };
-
     TBlocksDirtyMap(
         TArenaAllocatorPoolPtr arenaAllocatorPool,
         const TVChunkConfig& vChunkConfig,
@@ -62,7 +56,6 @@ public:
     [[nodiscard]] TReadHint MakeReadHint(TBlockRange16 range);
     [[nodiscard]] TFlushHints MakeFlushHint(size_t batchSize);
     [[nodiscard]] TEraseHints MakeEraseHint(size_t batchSize);
-    [[nodiscard]] TEraseHints MakeEraseBelatedHint();
 
     // Registers a write as pending (lsn generated, data not in any PBuffer
     // yet) so that the cleanup bound covers it from the moment of generation.
@@ -73,6 +66,11 @@ public:
         TBlockRange16 range,
         THostMask requested,
         THostMask confirmed);
+
+    // Successful answers that came after the client had been replied to. A
+    // record that has already left the map is ignored: its copy is below the
+    // vchunk barrier.
+    void OnBelatedWrite(TPBufferKey pBufferKey, THostMask completed);
     void FlushFinished(
         THostRoute route,
         const TVector<TPBufferKey>& flushOk,
@@ -81,10 +79,6 @@ public:
         THostIndex host,
         const TVector<TPBufferKey>& eraseOk,
         const TVector<TPBufferKey>& eraseFailed);
-
-    void UpdateBelatedEraseQueue(
-        THostMask completedWrites,
-        TPBufferKey pBufferKey);
 
     // Sets the readable prefix of one DDisk for tests.
     void SetReadablePrefixDebugOnly(THostIndex host, ui64 bytesOffset);
@@ -106,7 +100,6 @@ public:
     [[nodiscard]] size_t GetInflightCount() const;
     [[nodiscard]] size_t GetFlushPendingCount() const;
     [[nodiscard]] size_t GetErasePendingCount() const;
-    [[nodiscard]] size_t GetEraseBelatedCount() const;
     [[nodiscard]] ui64 GetMinFlushPendingLsn() const;
     [[nodiscard]] ui64 GetMinErasePendingLsn() const;
     [[nodiscard]] std::optional<TPBufferKey> GetSafeBarrierForErase() const;
@@ -148,8 +141,13 @@ public:
 
     // Persist
     [[nodiscard]] bool NeedPersist() const;
-    // Returns an empty proto when no DDisk needs repair.
+    // Returns an empty proto when no DDisk needs repair and no barrier is set.
     [[nodiscard]] TDirtyMapStateProto GetStateForPersist() const;
+    // The vchunk barrier to persist and the one already persisted. A record
+    // waiting for the barrier leaves the map once the persisted barrier is
+    // not below its key.
+    [[nodiscard]] TPBufferKey GetBarrierTarget() const;
+    [[nodiscard]] TPBufferKey GetPersistedBarrier() const;
     // Predicts the future state after applying vChunkConfig without changing
     // the current in-memory state.
     [[nodiscard]] TDirtyMapStateProto MakeFutureState(
@@ -188,16 +186,6 @@ private:
         ILockableRanges::TLockRangeHandle,
         THostMask,
         TBlockRange16>;
-
-    struct TInfoEraseBelated
-    {
-        TPBufferKey PBufferKey;
-        THostMask Hosts;
-
-        bool operator<(const TInfoEraseBelated& other) const;
-    };
-
-    using TInfoEraseBelatedSet = TArenaSet<TInfoEraseBelated>;
 
     struct TInflightDDiskSync
     {
@@ -240,7 +228,15 @@ private:
         TBlockRange16 range,
         TInflightInfo& inflightInfo);
 
-    void RemovePBuffer(TPBufferKey pBufferKey);
+    // Drops a record that has nothing left to erase. Returns true if it is
+    // gone from the map.
+    bool RemoveIfErased(TPBufferKey pBufferKey, const TInflightInfo& inflight);
+    // Raises the barrier target over the records waiting for it, but strictly
+    // below every record whose data lives only in PBuffers.
+    void MaybeAdvanceBarrier();
+    // Forgets the records waiting for the barrier that the persisted barrier
+    // now covers.
+    void ForgetBelowBarrier();
 
     const TArenaAllocatorPoolPtr ArenaAllocatorPool;
     const IArenaAllocatorPtr ArenaAllocator;
@@ -266,8 +262,6 @@ private:
     // Using TSet for O(1) min LSN access.
     TPBufferKeySet ReadyToErase{ArenaAllocatorPool.get()};
 
-    TInfoEraseBelatedSet ReadyToEraseBelated{ArenaAllocatorPool.get()};
-
     // In-flight reads and the locks they create.
     ILockableRanges::TLockRangeHandle InflightDDiskReadsGenerator = 0;
     TInflightDDiskReadsMap InflightDDiskReads;
@@ -281,6 +275,10 @@ private:
     TVector<TDDiskState> DDiskStates;
     // Changes when the behind map changes.
     ui32 StateGeneration = 0;
+    TPBufferKey BarrierTarget;
+    // The state generation in which BarrierTarget got its value.
+    ui32 BarrierTargetGeneration = 0;
+    TPBufferKey PersistedBarrier;
     // Last persisted DDisks states generation.
     ui32 PersistedStateGeneration = 0;
 

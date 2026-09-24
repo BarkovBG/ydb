@@ -589,6 +589,156 @@ Y_UNIT_TEST_SUITE(TInflightInfoTests)
         EraseAll(inflightInfo);
     }
 
+    Y_UNIT_TEST(ShouldReachErasedFromWriteWithoutQuorum)
+    {
+        TTestReadyQueue readyQueue;
+        TInflightInfo inflightInfo(
+            &readyQueue,
+            MakeDDisks(),
+            THostMask::MakeEmpty());
+
+        // The quorum was not reached and the client got an error: H0 holds a
+        // copy, H1 and H2 did not confirm.
+        inflightInfo.OnWriteWithoutQuorum(
+            MakePrimaryHosts(),
+            THostMask::MakeOne(THostIndex{0}));
+
+        UNIT_ASSERT_VALUES_EQUAL(
+            TInflightInfo::EState::PBufferDiscarded,
+            inflightInfo.GetState());
+
+        // The write was answered with an error, so reads go to DDisk.
+        UNIT_ASSERT_VALUES_EQUAL(true, inflightInfo.ReadMask().OnlyDDisk());
+
+        // Every requested host is erased once: an error does not prove that
+        // nothing landed.
+        UNIT_ASSERT_VALUES_EQUAL(
+            "[H0,H1,H2]",
+            inflightInfo.GetEraseNeeded().Print());
+        UNIT_ASSERT_VALUES_EQUAL(false, inflightInfo.IsWaitingForBarrier());
+
+        // Erasing the copies does not change the state either.
+        for (const auto host: MakePrimaryHosts()) {
+            inflightInfo.RequestErase(host);
+        }
+        for (const auto host: MakePrimaryHosts()) {
+            inflightInfo.ConfirmErase(host);
+        }
+        UNIT_ASSERT_VALUES_EQUAL(
+            TInflightInfo::EState::PBufferDiscarded,
+            inflightInfo.GetState());
+
+        // H1 and H2 never confirmed the write: their erase answers prove
+        // nothing, so the record waits for the vchunk barrier.
+        UNIT_ASSERT_VALUES_EQUAL(true, inflightInfo.IsWaitingForBarrier());
+        UNIT_ASSERT_VALUES_EQUAL("[]", inflightInfo.GetEraseNeeded().Print());
+
+        inflightInfo.ForgetByBarrier();
+        UNIT_ASSERT_VALUES_EQUAL(
+            TInflightInfo::EState::PBufferErased,
+            inflightInfo.GetState());
+    }
+
+    Y_UNIT_TEST(ShouldWaitForBarrierWhenRequestedHostNeverConfirmed)
+    {
+        TTestReadyQueue readyQueue;
+        TInflightInfo inflightInfo(
+            &readyQueue,
+            MakeDDisks(),
+            THostMask::MakeEmpty());
+
+        // H3 was asked to write too, but never answered.
+        inflightInfo.OnWritten(THostMask::MakeAll(4), MakePrimaryHosts());
+        FlushAll(inflightInfo);
+
+        // Every requested host is erased once, H3 included.
+        UNIT_ASSERT_VALUES_EQUAL(
+            "[H0,H1,H2,H3]",
+            inflightInfo.GetEraseNeeded().Print());
+        UNIT_ASSERT_VALUES_EQUAL(false, inflightInfo.IsWaitingForBarrier());
+        for (const auto host: THostMask::MakeAll(4)) {
+            inflightInfo.RequestErase(host);
+        }
+        for (const auto host: THostMask::MakeAll(4)) {
+            inflightInfo.ConfirmErase(host);
+        }
+
+        // H3 never confirmed the write: its erase may have run before the
+        // copy landed, so the record stays and waits for the barrier.
+        UNIT_ASSERT_VALUES_EQUAL(
+            TInflightInfo::EState::PBufferFlushed,
+            inflightInfo.GetState());
+        UNIT_ASSERT_VALUES_EQUAL(true, inflightInfo.IsWaitingForBarrier());
+        UNIT_ASSERT_VALUES_EQUAL("[]", inflightInfo.GetEraseNeeded().Print());
+
+        inflightInfo.ForgetByBarrier();
+        UNIT_ASSERT_VALUES_EQUAL(
+            TInflightInfo::EState::PBufferErased,
+            inflightInfo.GetState());
+    }
+
+    Y_UNIT_TEST(ShouldNotEraseAgainAfterBelatedAnswer)
+    {
+        TTestReadyQueue readyQueue;
+        TInflightInfo inflightInfo(
+            &readyQueue,
+            MakeDDisks(),
+            THostMask::MakeEmpty());
+
+        inflightInfo.OnWritten(THostMask::MakeAll(4), MakePrimaryHosts());
+        FlushAll(inflightInfo);
+        for (const auto host: THostMask::MakeAll(4)) {
+            inflightInfo.RequestErase(host);
+        }
+        for (const auto host: THostMask::MakeAll(4)) {
+            inflightInfo.ConfirmErase(host);
+        }
+        UNIT_ASSERT_VALUES_EQUAL(true, inflightInfo.IsWaitingForBarrier());
+
+        // H3 answers after its erase: the copy may have landed after the
+        // erase, and the answer does not make H3 confirmed. Nothing is erased
+        // again, the barrier covers what the erase missed.
+        inflightInfo.OnBelatedWrite(THostMask::MakeOne(THostIndex{3}));
+        UNIT_ASSERT_VALUES_EQUAL("[]", inflightInfo.GetEraseNeeded().Print());
+        UNIT_ASSERT_VALUES_EQUAL(true, inflightInfo.IsWaitingForBarrier());
+        UNIT_ASSERT_VALUES_EQUAL(
+            TInflightInfo::EState::PBufferFlushed,
+            inflightInfo.GetState());
+
+        inflightInfo.ForgetByBarrier();
+        UNIT_ASSERT_VALUES_EQUAL(
+            TInflightInfo::EState::PBufferErased,
+            inflightInfo.GetState());
+    }
+
+    Y_UNIT_TEST(ShouldCountBelatedAnswerBeforeErase)
+    {
+        TTestReadyQueue readyQueue;
+        TInflightInfo inflightInfo(
+            &readyQueue,
+            MakeDDisks(),
+            THostMask::MakeEmpty());
+
+        inflightInfo.OnWritten(THostMask::MakeAll(4), MakePrimaryHosts());
+        FlushAll(inflightInfo);
+
+        // H3 answers before any erase was sent to it: the erase that follows
+        // runs after the copy landed, so H3 counts as confirmed.
+        inflightInfo.OnBelatedWrite(THostMask::MakeOne(THostIndex{3}));
+        for (const auto host: THostMask::MakeAll(4)) {
+            inflightInfo.RequestErase(host);
+        }
+        for (const auto host: THostMask::MakeAll(4)) {
+            inflightInfo.ConfirmErase(host);
+        }
+
+        // Every requested host confirmed both the write and the erase: no
+        // barrier needed.
+        UNIT_ASSERT_VALUES_EQUAL(
+            TInflightInfo::EState::PBufferErased,
+            inflightInfo.GetState());
+    }
+
     Y_UNIT_TEST(ShouldReturnDDiskReadMaskForPendingWrite)
     {
         TTestReadyQueue readyQueue;
@@ -765,6 +915,36 @@ Y_UNIT_TEST_SUITE(TInflightInfoTests)
         UNIT_ASSERT_VALUES_EQUAL(0, readyQueue.GetTotalBytes(THostIndex{2}));
     }
 
+    Y_UNIT_TEST(ShouldCountLockedBytesOfBelatedCopy)
+    {
+        TTestReadyQueue readyQueue;
+        TInflightInfo inflightInfo(
+            &readyQueue,
+            MakeDDisks(),
+            THostMask::MakeEmpty());
+
+        // H3 was asked to write too, but the quorum was reached without it.
+        inflightInfo.OnWritten(THostMask::MakeAll(4), MakePrimaryHosts());
+
+        // Locked bytes follow the requested hosts, H3 included.
+        inflightInfo.LockPBuffer();
+        for (const auto host: THostMask::MakeAll(4)) {
+            UNIT_ASSERT_VALUES_EQUAL(4096, readyQueue.GetLockedBytes(host));
+        }
+
+        // H3 answers under the lock: nothing changes for the counter.
+        inflightInfo.OnBelatedWrite(THostMask::MakeMask({THostIndex{3}}));
+        UNIT_ASSERT_VALUES_EQUAL(
+            4096,
+            readyQueue.GetLockedBytes(THostIndex{3}));
+
+        // Unlocking subtracts exactly what was added, on every host.
+        inflightInfo.UnlockPBuffer();
+        for (const auto host: THostMask::MakeAll(4)) {
+            UNIT_ASSERT_VALUES_EQUAL(0, readyQueue.GetLockedBytes(host));
+        }
+    }
+
     Y_UNIT_TEST(ShouldTrackLockedBytes)
     {
         TTestReadyQueue readyQueue;
@@ -923,13 +1103,20 @@ Y_UNIT_TEST_SUITE(TInflightInfoTests)
             true,
             readyQueue.ReadyToErase.contains(MakeKey(123)));
 
-        // Erase all still-written hosts (host 3 excluded via Disabled).
+        // Erase all still-written hosts (host 3 excluded via Disabled). The
+        // copy on host 3 is left to the vchunk barrier.
         inflightInfo.RequestErase(THostIndex{0});
         inflightInfo.RequestErase(THostIndex{1});
         inflightInfo.RequestErase(THostIndex{2});
         inflightInfo.ConfirmErase(THostIndex{0});
         inflightInfo.ConfirmErase(THostIndex{1});
         inflightInfo.ConfirmErase(THostIndex{2});
+        UNIT_ASSERT_VALUES_EQUAL(
+            TInflightInfo::EState::PBufferFlushed,
+            inflightInfo.GetState());
+        UNIT_ASSERT_VALUES_EQUAL(true, inflightInfo.IsWaitingForBarrier());
+
+        inflightInfo.ForgetByBarrier();
         UNIT_ASSERT_VALUES_EQUAL(
             TInflightInfo::EState::PBufferErased,
             inflightInfo.GetState());
@@ -1057,7 +1244,7 @@ Y_UNIT_TEST_SUITE(TInflightInfoTests)
 
     // In the erasing state, disabling the last non-erased host lets the erase
     // complete because EraseConfirmed\Disabled == WriteRequested\Disabled.
-    Y_UNIT_TEST(ShouldUpdateHostsCompleteEraseWhenDisablingPendingHost)
+    Y_UNIT_TEST(ShouldWaitForBarrierWhenDisablingPendingHost)
     {
         TTestReadyQueue readyQueue;
         TInflightInfo inflightInfo(
@@ -1073,17 +1260,62 @@ Y_UNIT_TEST_SUITE(TInflightInfoTests)
         inflightInfo.RequestErase(THostIndex{1});
         inflightInfo.ConfirmErase(THostIndex{0});
         inflightInfo.ConfirmErase(THostIndex{1});
+        // Erasing copies does not change the state: the data is on DDisk and
+        // stays there. Only the erase masks move.
         UNIT_ASSERT_VALUES_EQUAL(
-            TInflightInfo::EState::PBufferErasing,
+            TInflightInfo::EState::PBufferFlushed,
             inflightInfo.GetState());
 
-        // Disable + remove host 2. Erase completes.
+        // Disable + remove host 2. Its copy is left to the barrier: nothing
+        // more to erase by address, but the record cannot leave on its own.
         auto mask = THostMask::MakeMask({THostIndex{2}});
         inflightInfo.UpdateHosts(THostMask::MakeEmpty(), mask, mask);
 
         UNIT_ASSERT_VALUES_EQUAL(
+            TInflightInfo::EState::PBufferFlushed,
+            inflightInfo.GetState());
+        UNIT_ASSERT_VALUES_EQUAL("[]", inflightInfo.GetEraseNeeded().Print());
+        UNIT_ASSERT_VALUES_EQUAL(true, inflightInfo.IsWaitingForBarrier());
+
+        inflightInfo.ForgetByBarrier();
+        UNIT_ASSERT_VALUES_EQUAL(
             TInflightInfo::EState::PBufferErased,
             inflightInfo.GetState());
+    }
+
+    // A locked record is being read from its PBuffers, so disabling every
+    // host it was written to must not hand it to the barrier before the read
+    // is over.
+    Y_UNIT_TEST(ShouldNotWaitForBarrierWhileLocked)
+    {
+        TTestReadyQueue readyQueue;
+        TInflightInfo inflightInfo(
+            &readyQueue,
+            MakeDDisks(),
+            THostMask::MakeEmpty());
+        inflightInfo.OnWritten(MakePrimaryHosts(), MakePrimaryHosts());
+
+        inflightInfo.LockPBuffer();
+        FlushAll(inflightInfo);
+        UNIT_ASSERT_VALUES_EQUAL(
+            TInflightInfo::EState::PBufferFlushed,
+            inflightInfo.GetState());
+
+        // Every written host is disabled: nothing is left to erase by
+        // address, but the read still holds the copies.
+        const auto mask = MakePrimaryHosts();
+        inflightInfo.UpdateHosts(THostMask::MakeEmpty(), mask, mask);
+        UNIT_ASSERT_VALUES_EQUAL(
+            TInflightInfo::EState::PBufferFlushed,
+            inflightInfo.GetState());
+        UNIT_ASSERT_VALUES_EQUAL(false, inflightInfo.IsWaitingForBarrier());
+
+        // The read is over: the record is handed to the barrier.
+        inflightInfo.UnlockPBuffer();
+        UNIT_ASSERT_VALUES_EQUAL(
+            TInflightInfo::EState::PBufferFlushed,
+            inflightInfo.GetState());
+        UNIT_ASSERT_VALUES_EQUAL(true, inflightInfo.IsWaitingForBarrier());
     }
 
     // Adding a new desired DDisk while flushing must re-register the pBufferKey
@@ -1291,13 +1523,20 @@ Y_UNIT_TEST_SUITE(TInflightInfoTests)
             "[H0,H1,H2]",
             readyQueue.GetFlushCompletedMask(MakeKey(123)));
 
-        // Erase all still-written hosts (host 3 excluded via Disabled).
+        // Erase all still-written hosts (host 3 excluded via Disabled). The
+        // copy on host 3 is left to the vchunk barrier.
         inflightInfo.RequestErase(THostIndex{0});
         inflightInfo.RequestErase(THostIndex{1});
         inflightInfo.RequestErase(THostIndex{2});
         inflightInfo.ConfirmErase(THostIndex{0});
         inflightInfo.ConfirmErase(THostIndex{1});
         inflightInfo.ConfirmErase(THostIndex{2});
+        UNIT_ASSERT_VALUES_EQUAL(
+            TInflightInfo::EState::PBufferFlushed,
+            inflightInfo.GetState());
+        UNIT_ASSERT_VALUES_EQUAL(true, inflightInfo.IsWaitingForBarrier());
+
+        inflightInfo.ForgetByBarrier();
         UNIT_ASSERT_VALUES_EQUAL(
             TInflightInfo::EState::PBufferErased,
             inflightInfo.GetState());

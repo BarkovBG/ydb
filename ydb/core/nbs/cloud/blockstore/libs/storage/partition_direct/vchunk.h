@@ -172,10 +172,8 @@ private:
     void DoFlush(bool force);
     void OnFlushResponse(const TFlushRequestExecutor::TResponse& response);
 
-    void DoErase(bool force, TBlocksDirtyMap::EEraseType eraseType);
+    void DoErase(bool force);
     void OnEraseResponse(const TEraseRequestExecutor::TResponse& response);
-    void OnEraseBelatedResponse(
-        const TEraseRequestExecutor::TResponse& response);
 
     void StartPersist();
     void DoPersistDirtyMap();

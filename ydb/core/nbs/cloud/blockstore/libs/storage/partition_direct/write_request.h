@@ -52,9 +52,13 @@ private:
         const TDBGWriteBlocksResponse& response,
         std::shared_ptr<NWilson::TSpan> span);
 
-    void MaybeReplyOrNotifyBelated(THostMask completedOnCurrentResponse);
+    // A host is fully answered when every write sent to it has answered:
+    // a hedged direct write and the indirect one can both be in flight.
+    // Only such a confirmed host is reported to the record, so that a copy
+    // cannot land after the record erased the host.
+    void MaybeReplyOrNotifyBelated(THostMask fullyAnsweredHosts);
     void Reply(NProto::TError error);
-    void NotifyBelated(THostMask completedOnCurrentResponse);
+    void NotifyBelated(THostMask fullyAnsweredHosts);
 
     void ScheduleHedging(TDuration hedgingDelay);
     void ScheduleRequestTimeout();
@@ -65,6 +69,7 @@ private:
     [[nodiscard]] bool IsQuorumReachable() const;
     [[nodiscard]] size_t GetQuorumDeficit() const;
     [[nodiscard]] THostMask GetRunningDirectWrites() const;
+    [[nodiscard]] THostMask GetFullyAnsweredHosts() const;
 
     TString ExtendedDebugState() const;
     TString PrintHostAndNode(THostIndex host) const;
@@ -82,6 +87,8 @@ private:
     THostMask IndirectCoordinator;
     THostMask RequestedIndirectWrites;
     THostMask RequestedDirectWrites;
+    THostMask AnsweredIndirectWrites;
+    THostMask AnsweredDirectWrites;
     THostMask CompletedWrites;
     THostMask FailedWrites;
     bool IsReplied = false;
