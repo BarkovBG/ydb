@@ -59,20 +59,19 @@ namespace NActors {
         Proxy->Metrics->SetPeerScopeId(Params.PeerScopeId);
         Proxy->Metrics->SetConnected(0);
         SetPrefix(Sprintf("SessionV2 %s [node %" PRIu32 "]", SelfId().ToString().data(), Proxy->PeerNodeId));
-
-        YDB_LOG_INFO("V2 session created",
-            {"marker", "ICS90"});
         if (const TDuration interval = Proxy->Common->Settings.SubscriberLivenessCheckInterval;
                 interval != TDuration::Zero()) {
             Schedule(interval, new TEvPrivate::TEvCheckSubscriberLiveness);
         }
+        YDB_LOG_INFO("V2 session created",
+            {"marker", "ICS90"});
     }
 
     void TInterconnectSessionTCPv2::SetNewConnection(TEvHandshakeDone::TPtr& ev) {
         // v2 establishes exactly one connection for its lifetime (no continuation)
         Y_ABORT_UNLESS(!Socket, "TInterconnectSessionTCPv2 does not support connection continuation");
 
-        YDB_LOG_INFO("Handshake done socket",
+        YDB_LOG_INFO("Handshake done socket: %li",
             {"marker", "ICS91"},
             {"sender", ev->Sender},
             {"self", ev->Get()->Self},
@@ -98,7 +97,8 @@ namespace NActors {
             onDisconnectCallback, SelfId().NodeId() < Proxy->PeerNodeId, ClockSkew, PingRTT,
             useXdc ? XdcSocket : TIntrusivePtr<NInterconnect::TStreamSocket>{});
         if (!EngineHandle) {
-            LOG_ERROR_IC_SESSION("ICS99", "v2 io_uring engine failed to register the connection");
+            YDB_LOG_ERROR("V2 io_uring engine failed to register the connection",
+                {"marker", "ICS99"});
             return Terminate(TDisconnectReason::LostConnection());
         }
 
@@ -195,9 +195,6 @@ namespace NActors {
             AddSubscriber(ev->Sender, ev->Cookie);
             Send(ev->Sender, MakeNodeConnectedEvent(), 0, ev->Cookie);
         }
-        YDB_LOG_DEBUG("V2 stub dropping forwarded event to",
-            {"marker", "ICS95"},
-            {"recipient", ev->Recipient.ToString().data()});
         EnqueueOutgoing(std::move(ev));
     }
 

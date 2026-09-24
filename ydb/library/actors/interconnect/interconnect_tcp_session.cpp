@@ -284,7 +284,7 @@ namespace NActors {
     }
 
     void TInterconnectSessionTCP::Terminate(TDisconnectReason reason) {
-        YDB_LOG_INFO_COMP(::NActorsServices::INTERCONNECT_SESSION, "Terminate socket",
+        YDB_LOG_INFO_COMP(::NActorsServices::INTERCONNECT_SESSION, "Socket: %li",
             {"marker", "ICS01"},
             {"socket", (Socket ? i64(*Socket) : -1)},
             {"reason", reason});
@@ -387,7 +387,7 @@ namespace NActors {
         // check for overloaded queues
         ui64 sendBufferDieLimit = Proxy->Common->Settings.SendBufferDieLimitInMB * ui64(1 << 20);
         if (sendBufferDieLimit != 0 && TotalOutputQueueSize > sendBufferDieLimit) {
-            YDB_LOG_ERROR_COMP(::NActorsServices::INTERCONNECT_SESSION, "Socket: output queue is overloaded, actual bytes, limit is",
+            YDB_LOG_ERROR_COMP(::NActorsServices::INTERCONNECT_SESSION, "Socket: %li output queue is overloaded, actual bytes, limit is",
                 {"marker", "ICS03"},
                 {"socket", Socket ? i64(*Socket) : -1},
                 {"totalOutputQueueSize", TotalOutputQueueSize},
@@ -540,12 +540,12 @@ namespace NActors {
             return;
         }
 
-        YDB_LOG_INFO_COMP(::NActorsServices::INTERCONNECT_SESSION, "Handshake done socket",
+        YDB_LOG_INFO_COMP(::NActorsServices::INTERCONNECT_SESSION, "Handshake done socket: %li",
             {"marker", "ICS09"},
             {"sender", ev->Sender},
             {"self", ev->Get()->Self},
             {"peer", ev->Get()->Peer},
-            {"socket", i64(*ev->Get()->Socket)},
+            {"qp", i64(*ev->Get()->Socket)},
             {"qpNum", (ev->Get()->RdmaHanshakeResult.IsOk() ? (int)ev->Get()->RdmaHanshakeResult.GetOk()->RdmaQp->GetQpNum() : -1)});
 
         NewConnectionSet = TActivationContext::Now();
@@ -607,12 +607,9 @@ namespace NActors {
         IActor::InvokeOtherActor(*inputSession, &TInputSessionTCP::StartRecieve, SelfId(), Socket, XdcSocket,
             ReceiveContext, Proxy->Metrics, Proxy->PeerNodeId, nextPacket, GetDeadPeerTimeout(), std::move(inputSessionParams));
 
-            YDB_LOG_DEBUG("Registering socket with UringPollerActor",
-                {"marker", "ICS11"});
-            YDB_LOG_DEBUG_COMP(::NActorsServices::INTERCONNECT_SESSION, "Registering socket in PollerActor",
-                {"marker", "ICS11"});
         // register our socket in poller actor
-        LOG_DEBUG_IC_SESSION("ICS11", "registering socket in PollerActor");
+        YDB_LOG_DEBUG_COMP(::NActorsServices::INTERCONNECT_SESSION, "Registering socket in PollerActor",
+            {"marker", "ICS11"});
         const bool success = Send(MakePollerActorId(), new TEvPollerRegister(Socket, ReceiverId, SelfId()));
         Y_ABORT_UNLESS(success);
         if (XdcSocket) {
@@ -887,7 +884,7 @@ namespace NActors {
             }
 
             const bool wasConnected(Socket);
-            YDB_LOG_INFO_COMP(::NActorsServices::INTERCONNECT_SESSION, "Socket disconnect",
+            YDB_LOG_INFO_COMP(::NActorsServices::INTERCONNECT_SESSION, "Socket disconnect %li",
                 {"marker", "ICS07"},
                 {"socket", Socket ? i64(*Socket) : -1},
                 {"reason", ev->Get()->Reason});
@@ -1102,30 +1099,6 @@ namespace NActors {
         WriteBlockedByFullSendBuffer = writeBlockedByFullSendBuffer;
     }
 
-                        YDB_LOG_NOTICE("Uring main write latch stuck",
-                            {"marker", "ICS41"},
-                            {"seconds", (now - UringMainWriteInFlightSince).SecondsFloat()},
-                            {"submitted", UringMainWritevSubmitted},
-                            {"completed", UringMainWriteCompleted},
-                            {"pendingWrites", UringContext->GetPendingWrites()},
-                            {"oobSize", OutOfBandStream.CalculateOutgoingSize()},
-                            {"submitCalls", UringContext->GetSubmitCalls()},
-                            {"subnitErrors", UringContext->GetSubmitErrors()},
-                            {"submitPartials", UringContext->GetSubmitPartials()},
-                            {"lastSubmitRet", UringContext->GetLastSubmitRet()},
-                            {"sqeFull", UringContext->GetSqeFull()});
-        YDB_LOG_NOTICE("Uring registration failed, falling back to epoll PollerActor",
-            {"marker", "ICS11"});
-        const bool success = Send(MakePollerActorId(), new TEvPollerRegister(Socket, ReceiverId, SelfId()));
-        Y_ABORT_UNLESS(success);
-        if (XdcSocket) {
-                YDB_LOG_NOTICE_COMP(::NActorsServices::INTERCONNECT_NETWORK, "Uring write error",
-                    {"selfNodeId", ::NActors::TActivationContext::AsActorContext().SelfID.NodeId()},
-                    {"peerNodeId", Proxy->PeerNodeId},
-                    {"error", strerror(err)});
-            YDB_LOG_NOTICE_COMP(::NActorsServices::INTERCONNECT_NETWORK, "Uring uring write: connection closed by peer",
-                {"selfNodeId", ::NActors::TActivationContext::AsActorContext().SelfID.NodeId()},
-                {"peerNodeId", Proxy->PeerNodeId});
     void TInterconnectSessionTCP::Handle(NInterconnect::NRdma::TEvRdmaIoDone::TPtr& ev) {
         ++RdmaSendWrCompleted;
         if (!ev->Get()->IsSuccess()) {
@@ -1250,18 +1223,6 @@ namespace NActors {
         while (FlushSchedule && now >= FlushSchedule.top()) {
             FlushSchedule.pop();
         }
-            YDB_LOG_DEBUG("Uring send hb",
-                {"marker", "ICS42"},
-                {"submitted", UringMainWritevSubmitted},
-                {"completed", UringMainWriteCompleted},
-                {"mainInFlight", (int)UringMainWriteInFlight},
-                {"latchHeld", latchHeldS},
-                {"pendingWrites", UringContext->GetPendingWrites()},
-                {"oobSize", OutOfBandStream.CalculateOutgoingSize()},
-                {"submitErrors", UringContext->GetSubmitErrors()},
-                {"submitPartials", UringContext->GetSubmitPartials()},
-                {"sqeFull", UringContext->GetSqeFull()}
-            );
         if (Socket) {
             if (now >= ForcePacketTimestamp) {
                 ++ConfirmPacketsForcedByTimeout;

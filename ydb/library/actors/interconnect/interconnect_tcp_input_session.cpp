@@ -11,6 +11,8 @@
 
 #define YDB_LOG_THIS_FILE_COMPONENT ::NActorsServices::INTERCONNECT_SESSION
 
+#define YDB_LOG_THIS_FILE_COMPONENT ::NActorsServices::INTERCONNECT_SESSION
+
 namespace NActors {
     LWTRACE_USING(ACTORLIB_PROVIDER);
 
@@ -1544,32 +1546,10 @@ namespace NActors {
         if (now >= LastReceiveTimestamp + DeadPeerTimeout) {
             ReceiveDataTCP();
             if (Socket && now >= LastReceiveTimestamp + DeadPeerTimeout) {
-                YDB_LOG_NOTICE("DeadPeer snapshot",
-                    {"marker", "ICIS30"},
-                    {"uring", (UringContext ? 1 : 0)},
-                    {"lastRecvAgeSeconds", (now - LastReceiveTimestamp).SecondsFloat()},
-                    {"bytesRead", BytesReadFromSocket},
-                    {"mainRecvCompletions", UringMainRecvCompletions},
-                    {"mainRecvBytes", UringMainRecvBytes},
-                    {"mainMsActive", (int)MainRecvMultishotActive},
-                    {"pendingRecvs", (UringContext ? UringContext->GetPendingRecvs() : 0)},
-                    {"submitCalls", (UringContext ? UringContext->GetSubmitCalls() : 0)},
-                    {"submitErrors", (UringContext ? UringContext->GetSubmitErrors() : 0)},
-                    {"submitPartials", (UringContext ? UringContext->GetSubmitPartials() : 0)},
-                    {"lastSubmitRet", (UringContext ? UringContext->GetLastSubmitRet() : 0)},
-                    {"sqeFull", (UringContext ? UringContext->GetSqeFull() : 0)});
                 // nothing has changed, terminate session
                 throw TExDestroySession{TDisconnectReason::DeadPeer()};
             }
         }
-            YDB_LOG_DEBUG("Uring recv hb",
-                {"marker", "ICIS31"},
-                {"lastRecvAge", (now - LastReceiveTimestamp).SecondsFloat()},
-                {"bytesRead", BytesReadFromSocket},
-                {"mainRecvCompletions", UringMainRecvCompletions},
-                {"mainRecvBytes", UringMainRecvBytes},
-                {"mainMsActive", (int)MainRecvMultishotActive},
-                {"pendingRecvs", UringContext->GetPendingRecvs()});
         Schedule(LastReceiveTimestamp + DeadPeerTimeout, new TEvCheckDeadPeer);
     }
 

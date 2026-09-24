@@ -279,7 +279,7 @@ namespace NActors {
                 }
 
                 const int err = errno;
-                YDB_LOG_WARN_CTX_COMP(*TlsActivationContext, NActorsServices::INTERCONNECT, "ICH40 Kernel liveness disabled for due to setsockopt failure",
+                YDB_LOG_WARN_CTX_COMP(*TlsActivationContext, NActorsServices::INTERCONNECT, "ICH40 Kernel liveness disabled for due to setsockopt( failure",
                     {"logPrefix", Actor->LogPrefix.data()},
                     {"socket", int(*Socket)},
                     {"name", name},
@@ -895,8 +895,6 @@ namespace NActors {
             return region;
         }
 
-            YDB_LOG_DEBUG_CTX_COMP(this->GetActorContext(), NActorsServices::INTERCONNECT, "Starting outgoing handshake",
-                {"marker", "ICH01"});
         TRdmaPreinitedSessionPtr RunRdmaIncomingHandshakePart() {
             MainChannel.ResetPollerToken();
             Rdma.SyncActor = Register(NInterconnect::NRdma::CreateRdmaIncommingSyncActor(
@@ -907,8 +905,9 @@ namespace NActors {
             MainChannel.RegisterInPoller();
 
             if (auto err = ev->Get()->Error()) {
-                LOG_LOG_IC_X(NActorsServices::INTERCONNECT, "ICRDMA", NLog::PRI_ERROR,
-                "RDMA send/receive handshake failed: %s", err->data());
+                YDB_LOG_ERROR_CTX(this->GetActorContext(), "RDMA send/receive handshake",
+                    {"marker", "ICRDMA"},
+                    {"failed", err->data()});
                 Params.AllowRdmaSendReceive = false;
                 return {};
             } else {
@@ -918,8 +917,9 @@ namespace NActors {
 
         TRdmaPreinitedSessionPtr RunRdmaOutgoingHandshakePart(const ::NActorsInterconnect::THandshakeSuccess& success) {
             const auto& remoteQpPrepared = success.GetQpPrepared();
-            LOG_LOG_IC_X(NActorsServices::INTERCONNECT, "ICRDMA", NLog::PRI_TRACE,
-                "peer has prepared qp: %d", remoteQpPrepared.GetQpNum());
+            YDB_LOG_TRACE_CTX(this->GetActorContext(), "Peer has prepared",
+                {"marker", "ICRDMA"},
+                {"qp", remoteQpPrepared.GetQpNum()});
             NInterconnect::NRdma::THandshakeData hd {
                 .QpNum = remoteQpPrepared.GetQpNum(),
                 .SubnetPrefix = remoteQpPrepared.GetSubnetPrefix(),
@@ -930,8 +930,11 @@ namespace NActors {
             if (err) {
                 TStringBuilder sb;
                 sb << hd;
-                LOG_LOG_IC_X(NActorsServices::INTERCONNECT, "ICRDMA", NLog::PRI_ERROR,
-                        "Unable to promote QP to RTS, err: %d (%s), handshake data: %s", err, strerror(err), sb.data());
+                YDB_LOG_ERROR_CTX(this->GetActorContext(), "Unable to promote QP to RTS, handshake",
+                    {"marker", "ICRDMA"},
+                    {"err", err},
+                    {"strerror", strerror(err)},
+                    {"data", sb.data()});
                 Rdma.HandShakeMemRegion.Reset();
                 Rdma.Clear();
                 return {};
@@ -952,8 +955,9 @@ namespace NActors {
                     Rdma.SyncActor = TActorId();
                     MainChannel.RegisterInPoller();
                     if (auto err = ev->Get()->Error()) {
-                        LOG_LOG_IC_X(NActorsServices::INTERCONNECT, "ICRDMA", NLog::PRI_ERROR,
-                        "RDMA send/receive handshake failed: %s", err->data());
+                        YDB_LOG_ERROR_CTX(this->GetActorContext(), "RDMA send/receive handshake",
+                            {"marker", "ICRDMA"},
+                            {"failed", err->data()});
                         Params.AllowRdmaSendReceive = false;
                         return {};
                     } else {
@@ -966,6 +970,8 @@ namespace NActors {
         }
 
         void PerformOutgoingHandshake(TRdmaPreinitedSessionPtr& rdmaSession) {
+            YDB_LOG_DEBUG_CTX(this->GetActorContext(), "Starting outgoing handshake",
+                {"marker", "ICH01"});
 
             // perform connection and log its result
             MainChannel.Connect(&PeerAddr);
@@ -1169,14 +1175,6 @@ namespace NActors {
 
                 if (Rdma) {
                     if (success.HasQpPrepared()) {
-                        YDB_LOG_TRACE_CTX_COMP(this->GetActorContext(), NActorsServices::INTERCONNECT, "Peer has prepared",
-                            {"marker", "ICRDMA"},
-                            {"qp", remoteQpPrepared.GetQpNum()});
-                            YDB_LOG_ERROR_CTX_COMP(this->GetActorContext(), NActorsServices::INTERCONNECT, "Unable to promote QP to RTS",
-                                {"marker", "ICRDMA"},
-                                {"errorCode", err},
-                                {"error", strerror(err)},
-                                {"sb", sb.data()});
                         rdmaSession = std::move(RunRdmaOutgoingHandshakePart(success));
                     } else {
                         YDB_LOG_ERROR_CTX_COMP(this->GetActorContext(), NActorsServices::INTERCONNECT, "Non success qp response from remote side",
@@ -1262,9 +1260,9 @@ namespace NActors {
                 << " PeerAddr# " << PeerAddr << " AddressList# " << makeList(), true);
         }
 
+        void PerformIncomingHandshake(std::optional<NActorsInterconnect::TRdmaCred>& rdma, TRdmaPreinitedSessionPtr& rdmaSession) {
             YDB_LOG_DEBUG_CTX(this->GetActorContext(), "Starting incoming handshake",
                 {"marker", "ICH02"});
-        void PerformIncomingHandshake(std::optional<NActorsInterconnect::TRdmaCred>& rdma, TRdmaPreinitedSessionPtr& rdmaSession) {
 
             // set up incoming socket
             MainChannel.SetupSocket();
@@ -1635,7 +1633,7 @@ namespace NActors {
             if (const NInterconnect::TAddress* addr = std::get_if<NInterconnect::TAddress>(&sockname)) {
                 rdmaCtx = NLinkMgr::GetCtx(*addr);
                 if (rdmaCtx) {
-                    YDB_LOG_TRACE_COMP(::NActorsServices::INTERCONNECT, "Found verbs context for address",
+                    YDB_LOG_TRACE_COMP(::NActorsServices::INTERCONNECT, "Found verbs fontext for address",
                         {"marker", "ICRDMA"},
                         {"address", std::get<0>(sockname)});
                 } else {
@@ -1644,7 +1642,7 @@ namespace NActors {
                         {"address", std::get<0>(sockname)});
                 }
             } else if (int* err = get_if<int>(&sockname)) {
-                YDB_LOG_ERROR_COMP(::NActorsServices::INTERCONNECT, "Unable to get local address for socket. Rdma will not be used",
+                YDB_LOG_ERROR_COMP(::NActorsServices::INTERCONNECT, "Unable to get local address for Rdma will not be used",
                     {"marker", "ICRDMA"},
                     {"socket", (int)(*MainChannel.GetSocketRef())},
                     {"err", *err});
@@ -1708,14 +1706,12 @@ namespace NActors {
                 if (err) {
                     TStringBuilder sb;
                     sb << hd;
-
+                    success.SetRdmaErr("Unable to promote QP to RTS on the incoming side");
                     YDB_LOG_ERROR_CTX(this->GetActorContext(), "Unable to promote QP to RTS, handshake",
                         {"marker", "ICRDMA"},
                         {"err", err},
                         {"strerror", strerror(err)},
                         {"data", sb.data()});
-                    success.SetRdmaErr("Unable to promote QP to RTS on the incoming side");
-                        "Unable to promote QP to RTS, err: %d (%s), handshake data: %s", err, strerror(err), sb.data());
                     Rdma.Clear();
                     return;
                 }
