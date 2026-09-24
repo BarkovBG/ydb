@@ -52,6 +52,8 @@ private:
         const TDBGWriteBlocksResponse& response,
         std::shared_ptr<NWilson::TSpan> span);
 
+    void MaybeSendReplacementDirectWrite(const NProto::TError& error);
+
     // A host is fully answered when every write sent to it has answered:
     // a hedged direct write and the indirect one can both be in flight.
     // Only such a confirmed host is reported to the record, so that a copy

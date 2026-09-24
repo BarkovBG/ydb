@@ -13,6 +13,8 @@
 
 #include <util/string/cast.h>
 
+#include <optional>
+
 namespace NYdb::NBS::NBlockStore::NStorage::NPartitionDirect {
 
 namespace {
@@ -317,19 +319,22 @@ void TWriteRequestExecutor::OnDirectWriteResponse(
     const auto fullyAnsweredHosts =
         GetFullyAnsweredHosts().LogicalAnd(THostMask::MakeOne(host));
 
+    std::optional<TEndSpanWithError> ender;
     if (!HasError(response.Error)) {
         CompletedWrites.Set(host);
-        MaybeReplyOrNotifyBelated(fullyAnsweredHosts);
-        return;
+    } else {
+        FailedWrites.Set(host);
+        ender.emplace(std::move(span), response.Error);
     }
 
-    FailedWrites.Set(host);
-    auto ender = TEndSpanWithError(std::move(span), response.Error);
+    MaybeReplyOrNotifyBelated(fullyAnsweredHosts);
+    MaybeSendReplacementDirectWrite(response.Error);
+}
 
-    if (IsReplied) {
-        // The failed hedge may have been the last write in flight to a host
-        // that confirmed another one: report that host now.
-        NotifyBelated(fullyAnsweredHosts);
+void TWriteRequestExecutor::MaybeSendReplacementDirectWrite(
+    const NProto::TError& error)
+{
+    if (!HasError(error) || IsReplied) {
         return;
     }
 
@@ -340,8 +345,8 @@ void TWriteRequestExecutor::OnDirectWriteResponse(
             "%s It is impossible to reach a quorum. %s %s",
             LogTitle.GetWithTime().c_str(),
             ExtendedDebugState().c_str(),
-            FormatError(response.Error).Quote().c_str());
-        Reply(response.Error);
+            FormatError(error).Quote().c_str());
+        Reply(error);
         return;
     }
 
@@ -359,7 +364,7 @@ void TWriteRequestExecutor::OnDirectWriteResponse(
             "%s All hand-offs attempts are over. %s %s",
             LogTitle.GetWithTime().c_str(),
             ExtendedDebugState().c_str(),
-            FormatError(response.Error).Quote().c_str());
+            FormatError(error).Quote().c_str());
         return;
     }
 
